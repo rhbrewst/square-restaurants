@@ -4,7 +4,12 @@ const http      = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const twilio    = require('twilio');
 const { handleToolCall } = require('./tools');
+const { startCall }      = require('./callLogger');
 const restaurant = require('../config/restaurant.json');
+
+// Capture caller info from the Twilio webhook before the WebSocket upgrades.
+// Keyed by CallSid so the WS handler can look it up from the 'start' event.
+const pendingCalls = new Map();
 
 const {
   PORT = 3000,
@@ -21,6 +26,13 @@ app.use(express.json());
 // We reply with TwiML that opens a Media Stream back to this server.
 
 app.post('/incoming-call', (req, res) => {
+  if (req.body.CallSid) {
+    pendingCalls.set(req.body.CallSid, {
+      callSid: req.body.CallSid,
+      from:    req.body.From || null,
+      to:      req.body.To   || null,
+    });
+  }
   const twiml   = new twilio.twiml.VoiceResponse();
   const connect = twiml.connect();
   connect.stream({ url: `wss://${req.headers.host}/media-stream` });
@@ -36,6 +48,7 @@ wss.on('connection', (twilioWs) => {
   console.log('\n📞 Incoming call — connecting to ElevenLabs…');
 
   let streamSid = null;
+  const logger  = startCall();
 
   // Open a WebSocket to ElevenLabs Conversational AI
   const elWs = new WebSocket(
@@ -65,10 +78,14 @@ wss.on('connection', (twilioWs) => {
     const msg = JSON.parse(raw);
 
     switch (msg.event) {
-      case 'start':
+      case 'start': {
         streamSid = msg.start.streamSid;
         console.log(`📡 Media stream started (${streamSid})`);
+        const callInfo = pendingCalls.get(msg.start.callSid) || {};
+        pendingCalls.delete(msg.start.callSid);
+        logger.setCallInfo({ ...callInfo, streamSid: msg.start.streamSid });
         break;
+      }
 
       case 'media':
         // Twilio sends mulaw 8 kHz audio as base64 — forward it directly.
@@ -79,6 +96,7 @@ wss.on('connection', (twilioWs) => {
 
       case 'stop':
         console.log('📵 Call ended by Twilio');
+        logger.endCall();
         elWs.close();
         break;
     }
@@ -92,6 +110,7 @@ wss.on('connection', (twilioWs) => {
     switch (msg.type) {
       case 'conversation_initiation_metadata':
         console.log('🎙️  Agent ready:', JSON.stringify(msg));
+        logger.setConversationId(msg.conversation_initiation_metadata_event?.conversation_id);
         break;
 
       case 'ping':
@@ -125,20 +144,30 @@ wss.on('connection', (twilioWs) => {
         }
         break;
 
-      case 'agent_response':
-        console.log(`🤖  Agent : ${msg.agent_response_event?.agent_response ?? ''}`);
+      case 'agent_response': {
+        const agentText = msg.agent_response_event?.agent_response ?? '';
+        console.log(`🤖  Agent : ${agentText}`);
+        logger.logTranscript('agent', agentText);
         break;
+      }
 
-      case 'user_transcript':
-        console.log(`👤  Caller: ${msg.user_transcription_event?.user_transcript ?? ''}`);
+      case 'user_transcript': {
+        const userText = msg.user_transcription_event?.user_transcript ?? '';
+        console.log(`👤  Caller: ${userText}`);
+        logger.logTranscript('user', userText);
         break;
+      }
 
       case 'client_tool_call': {
         const { tool_call_id, tool_name, parameters } = msg.client_tool_call;
         console.log(`\n🔧  Tool  : ${tool_name}(${JSON.stringify(parameters)})`);
 
+        const t0     = Date.now();
         const result = handleToolCall(tool_name, parameters);
+        const latency = Date.now() - t0;
+
         console.log(`📋  Result: ${JSON.stringify(result).slice(0, 120)}…\n`);
+        logger.logToolCall(tool_name, parameters, result, latency);
 
         elWs.send(JSON.stringify({
           type:         'client_tool_result',
@@ -154,16 +183,24 @@ wss.on('connection', (twilioWs) => {
   // ── Cleanup ───────────────────────────────────────────────────────────────
 
   twilioWs.on('close', () => {
+    logger.endCall();
     if (elWs.readyState !== WebSocket.CLOSED) elWs.close();
   });
 
   elWs.on('close', (code, reason) => {
     console.log(`🔌 ElevenLabs disconnected — code: ${code}, reason: ${reason.toString() || '(none)'}`);
+    logger.endCall();
     if (twilioWs.readyState !== WebSocket.CLOSED) twilioWs.close();
   });
 
-  twilioWs.on('error', (err) => console.error('Twilio WS error:', err.message));
-  elWs.on('error',     (err) => console.error('ElevenLabs error:', err.message));
+  twilioWs.on('error', (err) => {
+    console.error('Twilio WS error:', err.message);
+    logger.logError('twilio_ws', err);
+  });
+  elWs.on('error', (err) => {
+    console.error('ElevenLabs error:', err.message);
+    logger.logError('elevenlabs_ws', err);
+  });
 });
 
 // ─── System prompt ────────────────────────────────────────────────────────────

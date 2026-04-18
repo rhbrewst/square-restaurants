@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "dev": "node scripts/dev.js",
     "conversation": "node src/conversation.js",
+    "report": "node scripts/report.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
