@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Square Restaurants — Voice AI Cost Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3347;
+      --text: #e8eaf0;
+      --muted: #8b90a8;
+      --twilio: #f22f46;
+      --elevenlabs: #7c4dff;
+      --claude: #d4a853;
+      --accent: #4ade80;
+      --accent2: #60a5fa;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 32px 40px 24px;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: #fff;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(74, 222, 128, 0.1);
+      border: 1px solid rgba(74, 222, 128, 0.3);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+    }
+
+    .badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .kpi {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+
+    .kpi-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .kpi-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .kpi-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    main {
+      padding: 32px 40px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      max-width: 1400px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+
+    .card.wide {
+      grid-column: 1 / -1;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+
+    .card-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    .chart-wrap {
+      position: relative;
+    }
+
+    .chart-wrap.donut {
+      max-width: 280px;
+      margin: 0 auto;
+    }
+
+    /* Duration slider */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .slider-row label {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    input[type=range] {
+      flex: 1;
+      min-width: 100px;
+      accent-color: var(--accent2);
+    }
+
+    #dur-display {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent2);
+      min-width: 55px;
+    }
+
+    .breakdown-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 13px;
+    }
+
+    .breakdown-table th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 500;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .breakdown-table td {
+      padding: 10px 8px;
+      border-bottom: 1px solid rgba(46, 51, 71, 0.5);
+    }
+
+    .breakdown-table tr:last-child td {
+      border-bottom: none;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    /* Volume toggle */
+    .toggle-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .toggle-btn {
+      padding: 5px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .toggle-btn.active {
+      background: var(--accent2);
+      border-color: var(--accent2);
+      color: #000;
+      font-weight: 600;
+    }
+
+    /* Pricing legend */
+    .pricing-legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .pricing-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .pricing-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      margin-top: 3px;
+    }
+
+    .pricing-name {
+      font-weight: 600;
+      font-size: 13px;
+      color: #fff;
+    }
+
+    .pricing-rate {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .note {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 16px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 6px;
+      border-left: 3px solid var(--border);
+      line-height: 1.7;
+    }
+
+    .note strong {
+      color: var(--accent);
+    }
+
+    @media (max-width: 768px) {
+      header { padding: 24px 20px 20px; }
+      main { padding: 20px; grid-template-columns: 1fr; }
+      .card.wide { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-top">
+    <div>
+      <h1>Square Restaurants — Voice AI Cost Dashboard</h1>
+      <p class="subtitle">Real pricing · Twilio + ElevenLabs Conversational AI + Claude Sonnet 4.5 · April 2026</p>
+    </div>
+    <div class="badge">Live prototype active</div>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-label">Cost / 1-min call</div>
+      <div class="kpi-value" id="kpi-1m">$0.12</div>
+      <div class="kpi-sub">Twilio + ElevenLabs + Claude</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cost / 3-min call</div>
+      <div class="kpi-value" id="kpi-3m">$0.35</div>
+      <div class="kpi-sub">Typical reservation call</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Cost / 5-min call</div>
+      <div class="kpi-value" id="kpi-5m">$0.58</div>
+      <div class="kpi-sub">Complex inquiry</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">100 calls / month</div>
+      <div class="kpi-value">~$36</div>
+      <div class="kpi-sub">At 3-min average + phone #</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">1,000 calls / month</div>
+      <div class="kpi-value">~$351</div>
+      <div class="kpi-sub">At 3-min average + phone #</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Dominant cost</div>
+      <div class="kpi-value" style="color: #7c4dff;">86%</div>
+      <div class="kpi-sub">ElevenLabs voice (3-min call)</div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Per-call breakdown by service (donut) -->
+  <div class="card">
+    <div class="card-title">Cost breakdown per call — by service</div>
+    <div class="card-desc">Use the slider to change call duration</div>
+
+    <div class="slider-row">
+      <label>Call duration</label>
+      <input type="range" id="dur-slider" min="1" max="15" value="3" step="1">
+      <span id="dur-display">3 min</span>
+    </div>
+
+    <div class="chart-wrap donut">
+      <canvas id="donutChart" height="260"></canvas>
+    </div>
+
+    <table class="breakdown-table" id="breakdown-table">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Rate</th>
+          <th>Cost</th>
+          <th>Share</th>
+        </tr>
+      </thead>
+      <tbody id="breakdown-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Stacked bar: cost by call duration -->
+  <div class="card">
+    <div class="card-title">Cost by call duration</div>
+    <div class="card-desc">Stacked by service · 1 to 15 minutes</div>
+    <div class="chart-wrap" style="height: 320px;">
+      <canvas id="stackedBar"></canvas>
+    </div>
+    <div class="note">
+      <strong>ElevenLabs dominates</strong> at all durations at $0.10/min. Claude costs stay low regardless — the LLM is the cheapest component.
+    </div>
+  </div>
+
+  <!-- Monthly scale projection -->
+  <div class="card wide">
+    <div class="card-title">Monthly cost at scale</div>
+    <div class="card-desc">Assumes a 3-minute average call · includes $1.15/month Twilio phone number rental · toggle view</div>
+
+    <div class="toggle-row">
+      <button class="toggle-btn active" onclick="setView('line', this)">Line chart</button>
+      <button class="toggle-btn" onclick="setView('bar', this)">Bar chart</button>
+    </div>
+
+    <div class="chart-wrap" style="height: 340px;">
+      <canvas id="scaleChart"></canvas>
+    </div>
+
+    <div class="note">
+      At <strong>1,000 calls/month</strong> you're spending ~$351 total ($301 ElevenLabs · $26 Twilio · $24 Claude · $1.15 phone number).
+      Volume discounts kick in on ElevenLabs Business plan ($0.08/min vs $0.10/min) — switching saves ~$60/1k calls.
+    </div>
+  </div>
+
+  <!-- Pricing reference -->
+  <div class="card wide">
+    <div class="card-title">Actual API pricing used in these calculations</div>
+    <div class="card-desc">Sourced April 2026 · all USD</div>
+    <div class="pricing-legend">
+      <div class="pricing-item">
+        <div class="pricing-dot" style="background: var(--twilio);"></div>
+        <div>
+          <div class="pricing-name">Twilio Voice (inbound)</div>
+          <div class="pricing-rate">$0.0085/min · inbound US local call</div>
+          <div class="pricing-rate">+$1.15/month US local number rental</div>
+        </div>
+      </div>
+      <div class="pricing-item">
+        <div class="pricing-dot" style="background: var(--elevenlabs);"></div>
+        <div>
+          <div class="pricing-name">ElevenLabs Conversational AI</div>
+          <div class="pricing-rate">$0.10/min · Creator/Pro plan (STT + TTS)</div>
+          <div class="pricing-rate">$0.08/min · Business annual plan</div>
+        </div>
+      </div>
+      <div class="pricing-item">
+        <div class="pricing-dot" style="background: var(--claude);"></div>
+        <div>
+          <div class="pricing-name">Claude Sonnet 4.5 (Anthropic)</div>
+          <div class="pricing-rate">$3.00/1M input tokens</div>
+          <div class="pricing-rate">$15.00/1M output tokens</div>
+        </div>
+      </div>
+      <div class="pricing-item">
+        <div class="pricing-dot" style="background: #38bdf8;"></div>
+        <div>
+          <div class="pricing-name">Claude token estimate / call</div>
+          <div class="pricing-rate">~350 input + ~175 output per exchange</div>
+          <div class="pricing-rate">~2 exchanges/min → ~$0.008/min</div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      Free tiers available during development: Twilio ~$15 trial credit · ElevenLabs 10,000 chars/month free ·
+      Anthropic new-account credit. ElevenLabs currently <strong>absorbs LLM costs</strong> on their end for Conversational AI — these may be billed separately in future.
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ─── Pricing constants ──────────────────────────────────────────────
+const TWILIO_PER_MIN = 0.0085;
+const EL_PER_MIN     = 0.10;
+// Claude: ~2 exchanges/min, 350 input + 175 output tokens each
+const CLAUDE_PER_MIN = 2 * (350 * 3e-6 + 175 * 15e-6); // ~$0.00735/min → ≈$0.008
+
+function costForDuration(mins) {
+  return {
+    twilio:     +(TWILIO_PER_MIN * mins).toFixed(4),
+    elevenlabs: +(EL_PER_MIN * mins).toFixed(4),
+    claude:     +(CLAUDE_PER_MIN * mins).toFixed(4),
+    get total() { return +(this.twilio + this.elevenlabs + this.claude).toFixed(4); }
+  };
+}
+
+// ─── Colors ─────────────────────────────────────────────────────────
+const C = {
+  twilio:     '#f22f46',
+  elevenlabs: '#7c4dff',
+  claude:     '#d4a853',
+  bg:         '#0f1117',
+  border:     '#2e3347',
+  muted:      '#8b90a8',
+  text:       '#e8eaf0',
+};
+
+Chart.defaults.color = C.muted;
+Chart.defaults.borderColor = C.border;
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+
+// ─── 1. DONUT CHART ──────────────────────────────────────────────────
+const donutCtx = document.getElementById('donutChart').getContext('2d');
+let currentDur = 3;
+
+const donut = new Chart(donutCtx, {
+  type: 'doughnut',
+  data: {
+    labels: ['Twilio', 'ElevenLabs', 'Claude'],
+    datasets: [{
+      data: [],
+      backgroundColor: [C.twilio, C.elevenlabs, C.claude],
+      borderColor: '#1a1d27',
+      borderWidth: 3,
+      hoverOffset: 6,
+    }]
+  },
+  options: {
+    cutout: '70%',
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` $${ctx.raw.toFixed(4)}  (${(ctx.parsed / ctx.chart.getDatasetMeta(0).total * 100).toFixed(1)}%)`
+        }
+      }
+    }
+  }
+});
+
+function updateDonut(mins) {
+  const c = costForDuration(mins);
+  donut.data.datasets[0].data = [c.twilio, c.elevenlabs, c.claude];
+  donut.update();
+  // update table
+  const rows = [
+    { name: 'Twilio', color: C.twilio,     rate: `$${TWILIO_PER_MIN}/min`,           cost: c.twilio },
+    { name: 'ElevenLabs', color: C.elevenlabs, rate: `$${EL_PER_MIN}/min`,           cost: c.elevenlabs },
+    { name: 'Claude', color: C.claude,     rate: `~$${CLAUDE_PER_MIN.toFixed(4)}/min`, cost: c.claude },
+    { name: 'Total', color: null,           rate: '',                                  cost: c.total },
+  ];
+  const tbody = document.getElementById('breakdown-body');
+  tbody.innerHTML = rows.map((r, i) => `
+    <tr>
+      <td>${r.color ? `<span class="swatch" style="background:${r.color}"></span>` : ''}${r.name}</td>
+      <td style="color:${C.muted}">${r.rate}</td>
+      <td>$${r.cost.toFixed(4)}</td>
+      <td>${r.color && c.total > 0 ? (r.cost/c.total*100).toFixed(1)+'%' : ''}</td>
+    </tr>
+  `).join('');
+}
+updateDonut(3);
+
+// Slider
+const slider = document.getElementById('dur-slider');
+const durDisplay = document.getElementById('dur-display');
+slider.addEventListener('input', () => {
+  const v = +slider.value;
+  durDisplay.textContent = `${v} min`;
+  updateDonut(v);
+});
+
+// ─── 2. STACKED BAR (cost by duration) ───────────────────────────────
+const durations = [1, 2, 3, 4, 5, 7, 10, 15];
+const stackCtx = document.getElementById('stackedBar').getContext('2d');
+
+new Chart(stackCtx, {
+  type: 'bar',
+  data: {
+    labels: durations.map(d => `${d} min`),
+    datasets: [
+      {
+        label: 'Twilio',
+        data: durations.map(d => costForDuration(d).twilio),
+        backgroundColor: C.twilio,
+        borderRadius: 3,
+      },
+      {
+        label: 'Claude',
+        data: durations.map(d => costForDuration(d).claude),
+        backgroundColor: C.claude,
+        borderRadius: 3,
+      },
+      {
+        label: 'ElevenLabs',
+        data: durations.map(d => costForDuration(d).elevenlabs),
+        backgroundColor: C.elevenlabs,
+        borderRadius: 3,
+      },
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: { stacked: true, grid: { display: false } },
+      y: {
+        stacked: true,
+        ticks: { callback: v => `$${v.toFixed(2)}` },
+        grid: { color: C.border }
+      }
+    },
+    plugins: {
+      legend: {
+        position: 'top',
+        labels: { boxWidth: 12, padding: 16 }
+      },
+      tooltip: {
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: $${ctx.raw.toFixed(4)}`,
+          footer: (items) => {
+            const total = items.reduce((s, i) => s + i.raw, 0);
+            return `Total: $${total.toFixed(4)}`;
+          }
+        }
+      }
+    }
+  }
+});
+
+// ─── 3. SCALE CHART (monthly volume) ─────────────────────────────────
+const volumes = [50, 100, 200, 500, 750, 1000, 2000, 5000];
+const AVG_MINS = 3;
+const PHONE_NUM = 1.15;
+
+function monthlyBreakdown(calls) {
+  const c = costForDuration(AVG_MINS);
+  return {
+    twilio:     +(c.twilio * calls + PHONE_NUM).toFixed(2),
+    elevenlabs: +(c.elevenlabs * calls).toFixed(2),
+    claude:     +(c.claude * calls).toFixed(2),
+    get total() { return +(this.twilio + this.elevenlabs + this.claude).toFixed(2); }
+  };
+}
+
+const scaleCtx = document.getElementById('scaleChart').getContext('2d');
+let scaleChart;
+
+function buildScaleChart(type) {
+  if (scaleChart) scaleChart.destroy();
+  const isLine = type === 'line';
+
+  scaleChart = new Chart(scaleCtx, {
+    type,
+    data: {
+      labels: volumes.map(v => v >= 1000 ? `${v/1000}k` : String(v)),
+      datasets: [
+        {
+          label: 'Twilio',
+          data: volumes.map(v => monthlyBreakdown(v).twilio),
+          backgroundColor: isLine ? 'transparent' : C.twilio,
+          borderColor: C.twilio,
+          borderWidth: 2,
+          pointBackgroundColor: C.twilio,
+          fill: false,
+          tension: 0.3,
+          borderRadius: isLine ? undefined : 3,
+        },
+        {
+          label: 'Claude',
+          data: volumes.map(v => monthlyBreakdown(v).claude),
+          backgroundColor: isLine ? 'transparent' : C.claude,
+          borderColor: C.claude,
+          borderWidth: 2,
+          pointBackgroundColor: C.claude,
+          fill: false,
+          tension: 0.3,
+          borderRadius: isLine ? undefined : 3,
+        },
+        {
+          label: 'ElevenLabs',
+          data: volumes.map(v => monthlyBreakdown(v).elevenlabs),
+          backgroundColor: isLine ? 'transparent' : C.elevenlabs,
+          borderColor: C.elevenlabs,
+          borderWidth: 2,
+          pointBackgroundColor: C.elevenlabs,
+          fill: false,
+          tension: 0.3,
+          borderRadius: isLine ? undefined : 3,
+        },
+        ...(isLine ? [{
+          label: 'Total',
+          data: volumes.map(v => monthlyBreakdown(v).total),
+          backgroundColor: 'transparent',
+          borderColor: '#4ade80',
+          borderWidth: 2.5,
+          borderDash: [6, 3],
+          pointBackgroundColor: '#4ade80',
+          fill: false,
+          tension: 0.3,
+        }] : [])
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          stacked: !isLine,
+          grid: { display: false },
+          title: { display: true, text: 'Calls per month', color: C.muted }
+        },
+        y: {
+          stacked: !isLine,
+          ticks: { callback: v => `$${v >= 1000 ? (v/1000).toFixed(1)+'k' : v}` },
+          grid: { color: C.border },
+          title: { display: true, text: 'Monthly cost (USD)', color: C.muted }
+        }
+      },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: { boxWidth: 12, padding: 16 }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: $${ctx.raw.toFixed(2)}`,
+            footer: (items) => {
+              // For line chart total is its own series; for bar, sum them
+              if (!isLine) {
+                const total = items.reduce((s, i) => s + i.raw, 0);
+                return `Total: $${total.toFixed(2)}/month`;
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+buildScaleChart('line');
+
+function setView(type, btn) {
+  document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  buildScaleChart(type);
+}
+
+// ─── Update KPI header ────────────────────────────────────────────────
+document.getElementById('kpi-1m').textContent = `$${costForDuration(1).total.toFixed(2)}`;
+document.getElementById('kpi-3m').textContent = `$${costForDuration(3).total.toFixed(2)}`;
+document.getElementById('kpi-5m').textContent = `$${costForDuration(5).total.toFixed(2)}`;
+</script>
+</body>
+</html>

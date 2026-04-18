@@ -1,0 +1,192 @@
+{
+  "name": "The Ember Room",
+  "tagline": "Wood-fired American cuisine in the heart of the city",
+  "address": "142 Ashwood Lane, Nashville, TN 37201",
+  "phone": "+16153330142",
+  "email": "reservations@theemberroom.com",
+  "website": "https://theemberroom.com",
+  "description": "The Ember Room is a cozy upscale American bistro specializing in wood-fired dishes, craft cocktails, and locally sourced seasonal ingredients. Founded in 2018, we pride ourselves on warm hospitality and unforgettable dining experiences.",
+
+  "hours": {
+    "monday":    { "open": "17:00", "close": "22:00" },
+    "tuesday":   { "open": "17:00", "close": "22:00" },
+    "wednesday": { "open": "17:00", "close": "22:00" },
+    "thursday":  { "open": "17:00", "close": "22:00" },
+    "friday":    { "open": "17:00", "close": "23:00" },
+    "saturday":  { "open": "12:00", "close": "23:00" },
+    "sunday":    { "open": "12:00", "close": "21:00" }
+  },
+
+  "tables": [
+    { "id": "T1",  "capacity": 2,  "location": "window" },
+    { "id": "T2",  "capacity": 2,  "location": "window" },
+    { "id": "T3",  "capacity": 4,  "location": "main floor" },
+    { "id": "T4",  "capacity": 4,  "location": "main floor" },
+    { "id": "T5",  "capacity": 4,  "location": "main floor" },
+    { "id": "T6",  "capacity": 6,  "location": "main floor" },
+    { "id": "T7",  "capacity": 6,  "location": "private nook" },
+    { "id": "T8",  "capacity": 8,  "location": "private nook" },
+    { "id": "T9",  "capacity": 2,  "location": "bar" },
+    { "id": "T10", "capacity": 2,  "location": "bar" }
+  ],
+
+  "reservation_policy": {
+    "max_party_size": 8,
+    "min_party_size": 1,
+    "advance_booking_days": 30,
+    "slot_duration_minutes": 90,
+    "slots": ["17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
+    "weekend_slots": ["12:00", "12:30", "13:00", "13:30", "14:00", "17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
+    "cancellation_hours": 24,
+    "cancellation_policy": "We kindly ask for at least 24 hours notice for cancellations. Late cancellations or no-shows for parties of 5 or more may be subject to a $25 per person fee.",
+    "deposit_required_party_size": 6,
+    "deposit_amount_per_person": 25,
+    "notes": "We hold reservations for 15 minutes past the booking time. Please call us if you are running late."
+  },
+
+  "menu": {
+    "starters": [
+      {
+        "name": "Wood-Fired Flatbread",
+        "description": "Roasted garlic, whipped ricotta, heirloom tomatoes, fresh basil, aged balsamic",
+        "price": 14,
+        "dietary": ["vegetarian"]
+      },
+      {
+        "name": "Ember Shrimp",
+        "description": "Charred Gulf shrimp, smoked paprika butter, grilled sourdough, lemon",
+        "price": 18,
+        "dietary": []
+      },
+      {
+        "name": "Beet & Burrata Salad",
+        "description": "Roasted golden and red beets, creamy burrata, candied walnuts, orange vinaigrette, microgreens",
+        "price": 16,
+        "dietary": ["vegetarian", "gluten-free"]
+      },
+      {
+        "name": "French Onion Soup",
+        "description": "Slow-caramelized onion broth, gruyère crouton, fresh thyme",
+        "price": 12,
+        "dietary": ["vegetarian"]
+      },
+      {
+        "name": "Smoked Chicken Wings",
+        "description": "Hickory-smoked, choice of buffalo or honey-bourbon glaze, celery, blue cheese",
+        "price": 16,
+        "dietary": ["gluten-free"]
+      }
+    ],
+
+    "mains": [
+      {
+        "name": "Ember-Grilled Ribeye",
+        "description": "14 oz prime ribeye, wood-fired over oak, compound herb butter, roasted fingerling potatoes, seasonal vegetables",
+        "price": 58,
+        "dietary": ["gluten-free"]
+      },
+      {
+        "name": "Pan-Seared Halibut",
+        "description": "Fresh Pacific halibut, saffron beurre blanc, spring pea risotto, crispy capers",
+        "price": 42,
+        "dietary": ["gluten-free"]
+      },
+      {
+        "name": "Wood-Roasted Half Chicken",
+        "description": "Free-range half chicken, chimichurri, roasted sweet potatoes, charred broccolini",
+        "price": 34,
+        "dietary": ["gluten-free"]
+      },
+      {
+        "name": "Mushroom Risotto",
+        "description": "Wild mushroom blend, truffle oil, aged parmesan, fresh herbs, shaved black truffle (seasonal)",
+        "price": 28,
+        "dietary": ["vegetarian", "gluten-free"]
+      },
+      {
+        "name": "The Ember Burger",
+        "description": "8 oz smash patty, aged white cheddar, caramelized onions, ember aioli, brioche bun, hand-cut fries",
+        "price": 22,
+        "dietary": []
+      },
+      {
+        "name": "House-Made Tagliatelle",
+        "description": "Fresh egg pasta, slow-braised short rib ragù, grana padano, fresh parsley",
+        "price": 32,
+        "dietary": []
+      }
+    ],
+
+    "sides": [
+      { "name": "Truffle Fries",           "price": 10, "dietary": ["vegetarian"] },
+      { "name": "Roasted Brussels Sprouts","price": 9,  "dietary": ["vegetarian", "gluten-free"] },
+      { "name": "Creamed Spinach",         "price": 8,  "dietary": ["vegetarian", "gluten-free"] },
+      { "name": "Mac & Cheese",            "price": 11, "dietary": ["vegetarian"] },
+      { "name": "Grilled Asparagus",       "price": 9,  "dietary": ["vegan", "gluten-free"] }
+    ],
+
+    "desserts": [
+      {
+        "name": "Warm Chocolate Lava Cake",
+        "description": "Dark chocolate, molten center, vanilla bean ice cream, raspberry coulis",
+        "price": 12,
+        "dietary": ["vegetarian"]
+      },
+      {
+        "name": "Crème Brûlée",
+        "description": "Classic vanilla custard, caramelized sugar crust, seasonal berries",
+        "price": 10,
+        "dietary": ["vegetarian", "gluten-free"]
+      },
+      {
+        "name": "Seasonal Sorbet",
+        "description": "Ask your server for today's selection. Three scoops.",
+        "price": 9,
+        "dietary": ["vegan", "gluten-free"]
+      }
+    ],
+
+    "drinks": {
+      "cocktails": [
+        { "name": "Ember Old Fashioned",  "description": "Smoke-infused bourbon, demerara, Angostura bitters, orange twist", "price": 16 },
+        { "name": "Ashwood Mule",         "description": "House ginger beer, vodka, lime, fresh mint, candied ginger", "price": 14 },
+        { "name": "Garden Spritz",        "description": "Aperol, prosecco, cucumber, elderflower, soda", "price": 13 }
+      ],
+      "wine_by_glass": [
+        { "name": "Pinot Grigio",  "region": "Veneto, Italy",      "price": 12 },
+        { "name": "Chardonnay",   "region": "Sonoma, CA",          "price": 14 },
+        { "name": "Pinot Noir",   "region": "Willamette Valley, OR","price": 15 },
+        { "name": "Cabernet Sauvignon", "region": "Napa Valley, CA","price": 18 }
+      ],
+      "non_alcoholic": [
+        { "name": "House Lemonade",      "price": 5 },
+        { "name": "Sparkling Water",     "price": 4 },
+        { "name": "Seasonal Iced Tea",   "price": 4 },
+        { "name": "Fresh-Pressed Juice", "price": 7 }
+      ]
+    }
+  },
+
+  "faqs": [
+    {
+      "question": "Do you accommodate dietary restrictions?",
+      "answer": "Absolutely. We can accommodate most dietary needs including vegetarian, vegan, and gluten-free. Please inform us when booking or speak with your server. Our kitchen handles nuts, dairy, and shellfish — please alert us to severe allergies."
+    },
+    {
+      "question": "Is there parking nearby?",
+      "answer": "Yes. There is a public parking garage on Ashwood Lane one block north, and street parking is available on weeknights. Valet is available Friday and Saturday evenings starting at 6 PM for $12."
+    },
+    {
+      "question": "Do you have a dress code?",
+      "answer": "Smart casual. We ask that guests avoid athletic wear or beachwear. We want everyone to feel comfortable and enjoy the atmosphere."
+    },
+    {
+      "question": "Can you accommodate large parties or events?",
+      "answer": "Yes! We can host private events for up to 50 guests in our private dining room. Please call us or email reservations@theemberroom.com for event inquiries."
+    },
+    {
+      "question": "Do you have a kids menu?",
+      "answer": "We don't have a dedicated kids menu, but our kitchen is happy to prepare simple dishes for little ones. Please ask your server."
+    }
+  ]
+}

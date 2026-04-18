@@ -1,0 +1,23 @@
+{
+  "name": "square-restaurants",
+  "version": "1.0.0",
+  "description": "Voice AI restaurant reservation agent — Twilio + ElevenLabs + Claude",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node scripts/dev.js",
+    "conversation": "node src/conversation.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "@elevenlabs/elevenlabs-js": "^2.43.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "twilio": "^5.13.1",
+    "ws": "^8.20.0"
+  }
+}
