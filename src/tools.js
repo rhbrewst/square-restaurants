@@ -6,8 +6,9 @@
  * HANDLERS    — called when Claude returns a tool_use block.
  */
 
-const restaurant = require('../config/restaurant.json');
-const store      = require('./reservationStore');
+const restaurant    = require('../config/restaurant.json');
+const store         = require('./reservationStore');
+const messageStore  = require('./messageStore');
 
 // ─────────────────────────────────────────
 // Tool Definitions (Claude API schema)
@@ -127,6 +128,37 @@ const TOOL_DEFINITIONS = [
         },
       },
       required: ['date', 'time', 'party_size', 'customer_name', 'customer_phone'],
+    },
+  },
+  {
+    name: 'leave_message',
+    description:
+      'Records a message for the restaurant management team to follow up on. ' +
+      'Use this instead of directing callers to ring back when they: have feedback about a prior visit, ' +
+      'have a lost and found inquiry, want to discuss a private event, have a complaint or compliment, ' +
+      'have a question you cannot answer, or request a callback for any reason. ' +
+      'Always collect the caller\'s name and phone number before calling this tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        caller_name: {
+          type: 'string',
+          description: 'Full name of the caller',
+        },
+        caller_phone: {
+          type: 'string',
+          description: 'Phone number to call back',
+        },
+        subject: {
+          type: 'string',
+          description: 'Brief subject — e.g. "Lost item", "Feedback", "Private event inquiry", "General question", "Complaint"',
+        },
+        message: {
+          type: 'string',
+          description: 'Full details of what the caller wants management to know or follow up on',
+        },
+      },
+      required: ['caller_name', 'caller_phone', 'subject', 'message'],
     },
   },
 ];
@@ -323,6 +355,26 @@ function book_reservation({ date, time, party_size, customer_name, customer_phon
   };
 }
 
+function leave_message({ caller_name, caller_phone, subject, message }) {
+  const record = {
+    id:           messageStore.generateId(),
+    caller_name,
+    caller_phone,
+    subject,
+    message,
+    created_at:   new Date().toISOString(),
+    status:       'unread',
+  };
+
+  messageStore.addMessage(record);
+
+  return {
+    success: true,
+    message_id: record.id,
+    confirmation: `Thank you, ${caller_name}. I've passed your message to our team and someone will be in touch at ${caller_phone} as soon as possible.`,
+  };
+}
+
 // ─────────────────────────────────────────
 // Dispatch: route tool_use block to handler
 // ─────────────────────────────────────────
@@ -333,6 +385,7 @@ function handleToolCall(toolName, toolInput) {
     case 'get_menu':            return get_menu(toolInput);
     case 'check_availability':  return check_availability(toolInput);
     case 'book_reservation':    return book_reservation(toolInput);
+    case 'leave_message':       return leave_message(toolInput);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
