@@ -8,73 +8,251 @@
   "description": "The Ember Room is a cozy upscale American bistro specializing in wood-fired dishes, craft cocktails, and locally sourced seasonal ingredients. Founded in 2018, we pride ourselves on warm hospitality and unforgettable dining experiences.",
 
   "hours": {
-    "monday":    { "open": "17:00", "close": "22:00" },
-    "tuesday":   { "open": "17:00", "close": "22:00" },
-    "wednesday": { "open": "17:00", "close": "22:00" },
-    "thursday":  { "open": "17:00", "close": "22:00" },
-    "friday":    { "open": "17:00", "close": "23:00" },
-    "saturday":  { "open": "12:00", "close": "23:00" },
-    "sunday":    { "open": "12:00", "close": "21:00" }
+    "monday":    { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "tuesday":   { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "wednesday": { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "thursday":  { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "friday":    { "open": "17:00", "close": "23:00", "kitchen_close": "22:30" },
+    "saturday":  { "open": "12:00", "close": "23:00", "kitchen_close": "22:30" },
+    "sunday":    { "open": "12:00", "close": "21:00", "kitchen_close": "20:30" }
+  },
+
+  "holiday_hours": {
+    "note": "We are closed on Thanksgiving Day and Christmas Day. We have reduced hours on Christmas Eve (close at 21:00) and New Year's Eve we are open until midnight with a special prix fixe menu. Please call ahead on major holidays to confirm hours."
+  },
+
+  "happy_hour": {
+    "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+    "start": "17:00",
+    "end": "18:30",
+    "note": "Happy hour runs Monday through Friday from 5 to 6:30 PM at the bar only.",
+    "specials": [
+      "$2 off all cocktails",
+      "$8 house wine by the glass",
+      "Half-price Truffle Fries and Wood-Fired Flatbread",
+      "$5 domestic beers"
+    ]
   },
 
   "tables": [
-    { "id": "T1",  "capacity": 2,  "location": "window" },
-    { "id": "T2",  "capacity": 2,  "location": "window" },
-    { "id": "T3",  "capacity": 4,  "location": "main floor" },
-    { "id": "T4",  "capacity": 4,  "location": "main floor" },
-    { "id": "T5",  "capacity": 4,  "location": "main floor" },
-    { "id": "T6",  "capacity": 6,  "location": "main floor" },
-    { "id": "T7",  "capacity": 6,  "location": "private nook" },
-    { "id": "T8",  "capacity": 8,  "location": "private nook" },
-    { "id": "T9",  "capacity": 2,  "location": "bar" },
-    { "id": "T10", "capacity": 2,  "location": "bar" }
+    { "id": "T1",  "capacity": 2,  "location": "window",       "notes": "Romantic, street view" },
+    { "id": "T2",  "capacity": 2,  "location": "window",       "notes": "Romantic, street view" },
+    { "id": "T3",  "capacity": 4,  "location": "main floor",   "notes": "Central, lively" },
+    { "id": "T4",  "capacity": 4,  "location": "main floor",   "notes": "Central, lively" },
+    { "id": "T5",  "capacity": 4,  "location": "main floor",   "notes": "Near fireplace" },
+    { "id": "T6",  "capacity": 6,  "location": "main floor",   "notes": "Round table, good for groups" },
+    { "id": "T7",  "capacity": 6,  "location": "private nook", "notes": "Semi-private, quieter" },
+    { "id": "T8",  "capacity": 8,  "location": "private nook", "notes": "Most private, ideal for celebrations" },
+    { "id": "T9",  "capacity": 2,  "location": "bar",          "notes": "Bar seating, great for solo diners or couples" },
+    { "id": "T10", "capacity": 2,  "location": "bar",          "notes": "Bar seating, great for solo diners or couples" }
   ],
+
+  "seating": {
+    "indoor_only": true,
+    "outdoor_seating": false,
+    "outdoor_note": "We do not currently have a patio or outdoor seating. We hope to add one in summer 2027.",
+    "bar_seating": "Bar seating is available on a walk-in basis only and is not reservable. Great option for solo diners or couples who want a more casual experience.",
+    "high_chairs": true,
+    "booster_seats": true,
+    "wheelchair_accessible_tables": ["T3", "T4", "T6"],
+    "special_requests_note": "We do our best to honor seating preferences but cannot guarantee specific tables. Please mention any preferences when booking and we will do our best."
+  },
 
   "reservation_policy": {
     "max_party_size": 8,
     "min_party_size": 1,
     "advance_booking_days": 30,
+    "same_day_reservations": true,
+    "same_day_note": "Same-day reservations are welcome based on availability. We recommend calling as early as possible.",
     "slot_duration_minutes": 90,
     "slots": ["17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
     "weekend_slots": ["12:00", "12:30", "13:00", "13:30", "14:00", "17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
+    "hold_time_minutes": 15,
     "cancellation_hours": 24,
     "cancellation_policy": "We kindly ask for at least 24 hours notice for cancellations. Late cancellations or no-shows for parties of 5 or more may be subject to a $25 per person fee.",
     "deposit_required_party_size": 6,
     "deposit_amount_per_person": 25,
+    "deposit_note": "A deposit of $25 per person is required for parties of 6 or more. Our team will follow up by phone to collect this. The deposit is fully credited toward your bill.",
+    "large_party_note": "For parties larger than 8, please call us directly or email reservations@theemberroom.com. We can accommodate groups up to 50 in our private dining room.",
+    "waitlist": {
+      "available": true,
+      "note": "If your preferred time is fully booked, we can add you to a waitlist and call if a spot opens. Ask us to add you when booking."
+    },
+    "walk_ins": {
+      "accepted": true,
+      "note": "Walk-ins are always welcome based on availability. We recommend calling ahead, especially on Friday and Saturday evenings, which book out quickly."
+    },
     "notes": "We hold reservations for 15 minutes past the booking time. Please call us if you are running late."
   },
 
+  "private_dining": {
+    "available": true,
+    "capacity_min": 15,
+    "capacity_max": 50,
+    "room_name": "The Hearth Room",
+    "note": "The Hearth Room is our private dining space, ideal for corporate dinners, rehearsal dinners, birthday celebrations, and other special events. It features a dedicated server and a customizable prix fixe menu. Contact us to check availability and pricing.",
+    "contact": "reservations@theemberroom.com or call +16153330142 and ask for our events coordinator."
+  },
+
+  "accessibility": {
+    "wheelchair_accessible_entrance": true,
+    "wheelchair_accessible_restrooms": true,
+    "wheelchair_accessible_tables": true,
+    "hearing_loop": false,
+    "braille_menu": false,
+    "large_print_menu": true,
+    "note": "Our main entrance on Ashwood Lane is step-free and fully wheelchair accessible. Please let us know in advance if you have any accessibility needs and we will ensure everything is arranged."
+  },
+
+  "parking": {
+    "valet": {
+      "available": true,
+      "days": ["friday", "saturday"],
+      "start_time": "18:00",
+      "price": 12,
+      "note": "Valet parking is available Friday and Saturday evenings starting at 6 PM. $12 flat rate."
+    },
+    "self_parking": {
+      "garage": "Public parking garage on Ashwood Lane, one block north of the restaurant. Open until midnight.",
+      "street": "Free street parking is available on weeknights. Limited on weekends — we recommend the garage.",
+      "rideshare": "Rideshare drop-off and pick-up is convenient on Ashwood Lane directly in front of the restaurant."
+    }
+  },
+
+  "payment": {
+    "accepted_methods": ["Visa", "Mastercard", "American Express", "Discover", "Apple Pay", "Google Pay", "cash"],
+    "split_checks": {
+      "available": true,
+      "note": "We are happy to split checks. Please let your server know at the start of your meal. We can split up to 6 ways per table."
+    },
+    "auto_gratuity": {
+      "applies_to_party_size": 6,
+      "percentage": 20,
+      "note": "An automatic 20% gratuity is added for parties of 6 or more. This can be adjusted at the manager's discretion for exceptional service."
+    },
+    "gift_cards": {
+      "available": true,
+      "purchase": "Gift cards can be purchased in any amount at the restaurant or by calling us. They never expire.",
+      "redemption": "Gift cards can be redeemed for any food, drink, or private dining purchase."
+    }
+  },
+
+  "dress_code": {
+    "policy": "Smart casual",
+    "details": "We ask that guests avoid athletic wear, beachwear, or overly casual attire. We want everyone to feel comfortable while respecting the atmosphere we work hard to create. When in doubt, think 'nice dinner out.'"
+  },
+
+  "special_occasions": {
+    "birthdays": {
+      "note": "We love celebrating birthdays! Please mention it when booking and we will note it for your server. We offer a complimentary dessert for the birthday guest."
+    },
+    "anniversaries": {
+      "note": "Let us know if you are celebrating an anniversary and we will do our best to give you a special table and a memorable experience."
+    },
+    "proposals": {
+      "note": "We have helped with many proposals! If you are planning to pop the question, please call us in advance so we can coordinate with you privately. We can arrange flowers, champagne, and a dedicated server."
+    },
+    "outside_cake": {
+      "allowed": true,
+      "cakeage_fee": 5,
+      "note": "You are welcome to bring an outside cake. We charge a $5 per person plating and service fee. Please let us know in advance so we can have plates and utensils ready."
+    },
+    "decorations": {
+      "note": "We allow modest table decorations such as balloons and flowers. Please arrange these in advance with our team. We do not allow glitter, confetti, or open flames other than birthday candles."
+    },
+    "general_note": "For any special occasion, the more notice you give us, the better we can make your evening. Call us or note it in your reservation."
+  },
+
+  "corkage": {
+    "allowed": true,
+    "fee_per_bottle": 25,
+    "max_bottles": 2,
+    "note": "Guests may bring their own wine or champagne for a corkage fee of $25 per bottle, limited to 2 bottles per table. We ask that the wine not already appear on our wine list."
+  },
+
+  "pets": {
+    "allowed": false,
+    "note": "We are not able to accommodate pets in the restaurant. Service animals are always welcome."
+  },
+
+  "kids": {
+    "welcome": true,
+    "dedicated_kids_menu": false,
+    "kids_menu_note": "We do not have a dedicated children's menu, but our kitchen is happy to prepare simple, off-menu items for young guests such as plain pasta with butter, grilled chicken, or a simple cheese plate. Please ask your server.",
+    "high_chairs": true,
+    "booster_seats": true,
+    "changing_facilities": true
+  },
+
+  "allergens": {
+    "general_note": "Our kitchen handles the following allergens: tree nuts (especially walnuts and almonds), shellfish, dairy, eggs, gluten, soy, and sesame. While we take every precaution, we cannot guarantee a fully allergen-free environment. Please inform us of any allergies when booking and remind your server.",
+    "severe_allergy_protocol": "For guests with severe or life-threatening allergies, we strongly recommend speaking with our chef directly before ordering. Please call ahead so we can prepare accordingly.",
+    "common_allergens_by_dish": "Ask your server about specific allergen content for any dish. We keep a full allergen matrix available at the restaurant."
+  },
+
+  "ambiance": {
+    "noise_level": "Moderate — lively but conversational. Peak hours (7–9 PM on weekends) are louder.",
+    "lighting": "Warm and dim — candle-lit tables in the evening.",
+    "music": "Curated background playlist — low-key jazz and acoustic on weeknights, livelier on weekends.",
+    "live_music": {
+      "available": true,
+      "schedule": "Live jazz every Friday and Saturday evening from 7:30 to 10 PM.",
+      "note": "Our live music adds to the ambiance but is kept at a volume that still allows easy conversation."
+    },
+    "best_for": ["date night", "anniversary", "birthday dinner", "business dinner", "group celebration", "solo dining at the bar"]
+  },
+
   "menu": {
+    "daily_specials": {
+      "note": "We feature rotating daily specials based on seasonal and local availability. Ask your server for today's specials when you arrive. These change frequently and are not listed here."
+    },
+    "prix_fixe": {
+      "available": false,
+      "note": "We do not currently offer a prix fixe menu for regular service. A prix fixe option is available for private dining events and on special occasions such as New Year's Eve. Contact us for details."
+    },
+
     "starters": [
       {
         "name": "Wood-Fired Flatbread",
         "description": "Roasted garlic, whipped ricotta, heirloom tomatoes, fresh basil, aged balsamic",
         "price": 14,
-        "dietary": ["vegetarian"]
+        "dietary": ["vegetarian"],
+        "allergens": ["gluten", "dairy"]
       },
       {
         "name": "Ember Shrimp",
         "description": "Charred Gulf shrimp, smoked paprika butter, grilled sourdough, lemon",
         "price": 18,
-        "dietary": []
+        "dietary": [],
+        "allergens": ["shellfish", "gluten", "dairy"]
       },
       {
         "name": "Beet & Burrata Salad",
         "description": "Roasted golden and red beets, creamy burrata, candied walnuts, orange vinaigrette, microgreens",
         "price": 16,
-        "dietary": ["vegetarian", "gluten-free"]
+        "dietary": ["vegetarian", "gluten-free"],
+        "allergens": ["dairy", "tree nuts"]
       },
       {
         "name": "French Onion Soup",
         "description": "Slow-caramelized onion broth, gruyère crouton, fresh thyme",
         "price": 12,
-        "dietary": ["vegetarian"]
+        "dietary": ["vegetarian"],
+        "allergens": ["gluten", "dairy"]
       },
       {
         "name": "Smoked Chicken Wings",
         "description": "Hickory-smoked, choice of buffalo or honey-bourbon glaze, celery, blue cheese",
         "price": 16,
-        "dietary": ["gluten-free"]
+        "dietary": ["gluten-free"],
+        "allergens": ["dairy"]
+      },
+      {
+        "name": "Tuna Tartare",
+        "description": "Sushi-grade ahi tuna, sesame oil, avocado, pickled cucumber, sriracha aioli, wonton crisps",
+        "price": 22,
+        "dietary": [],
+        "allergens": ["fish", "sesame", "gluten", "eggs"]
       }
     ],
 
@@ -83,46 +261,60 @@
         "name": "Ember-Grilled Ribeye",
         "description": "14 oz prime ribeye, wood-fired over oak, compound herb butter, roasted fingerling potatoes, seasonal vegetables",
         "price": 58,
-        "dietary": ["gluten-free"]
+        "dietary": ["gluten-free"],
+        "allergens": ["dairy"]
       },
       {
         "name": "Pan-Seared Halibut",
         "description": "Fresh Pacific halibut, saffron beurre blanc, spring pea risotto, crispy capers",
         "price": 42,
-        "dietary": ["gluten-free"]
+        "dietary": ["gluten-free"],
+        "allergens": ["fish", "dairy"]
       },
       {
         "name": "Wood-Roasted Half Chicken",
         "description": "Free-range half chicken, chimichurri, roasted sweet potatoes, charred broccolini",
         "price": 34,
-        "dietary": ["gluten-free"]
+        "dietary": ["gluten-free"],
+        "allergens": []
       },
       {
         "name": "Mushroom Risotto",
         "description": "Wild mushroom blend, truffle oil, aged parmesan, fresh herbs, shaved black truffle (seasonal)",
         "price": 28,
-        "dietary": ["vegetarian", "gluten-free"]
+        "dietary": ["vegetarian", "gluten-free"],
+        "allergens": ["dairy"]
       },
       {
         "name": "The Ember Burger",
         "description": "8 oz smash patty, aged white cheddar, caramelized onions, ember aioli, brioche bun, hand-cut fries",
         "price": 22,
-        "dietary": []
+        "dietary": [],
+        "allergens": ["gluten", "dairy", "eggs"]
       },
       {
         "name": "House-Made Tagliatelle",
         "description": "Fresh egg pasta, slow-braised short rib ragù, grana padano, fresh parsley",
         "price": 32,
-        "dietary": []
+        "dietary": [],
+        "allergens": ["gluten", "eggs", "dairy"]
+      },
+      {
+        "name": "Roasted Cauliflower Steak",
+        "description": "Whole roasted cauliflower, romesco sauce, crispy chickpeas, fresh herbs, lemon zest",
+        "price": 26,
+        "dietary": ["vegan", "gluten-free"],
+        "allergens": ["tree nuts"]
       }
     ],
 
     "sides": [
-      { "name": "Truffle Fries",           "price": 10, "dietary": ["vegetarian"] },
-      { "name": "Roasted Brussels Sprouts","price": 9,  "dietary": ["vegetarian", "gluten-free"] },
-      { "name": "Creamed Spinach",         "price": 8,  "dietary": ["vegetarian", "gluten-free"] },
-      { "name": "Mac & Cheese",            "price": 11, "dietary": ["vegetarian"] },
-      { "name": "Grilled Asparagus",       "price": 9,  "dietary": ["vegan", "gluten-free"] }
+      { "name": "Truffle Fries",            "price": 10, "dietary": ["vegetarian"],             "allergens": ["gluten"] },
+      { "name": "Roasted Brussels Sprouts", "price": 9,  "dietary": ["vegetarian", "gluten-free"], "allergens": [] },
+      { "name": "Creamed Spinach",          "price": 8,  "dietary": ["vegetarian", "gluten-free"], "allergens": ["dairy"] },
+      { "name": "Mac & Cheese",             "price": 11, "dietary": ["vegetarian"],             "allergens": ["gluten", "dairy"] },
+      { "name": "Grilled Asparagus",        "price": 9,  "dietary": ["vegan", "gluten-free"],   "allergens": [] },
+      { "name": "Roasted Fingerling Potatoes", "price": 8, "dietary": ["vegan", "gluten-free"], "allergens": [] }
     ],
 
     "desserts": [
@@ -130,19 +322,29 @@
         "name": "Warm Chocolate Lava Cake",
         "description": "Dark chocolate, molten center, vanilla bean ice cream, raspberry coulis",
         "price": 12,
-        "dietary": ["vegetarian"]
+        "dietary": ["vegetarian"],
+        "allergens": ["gluten", "dairy", "eggs"]
       },
       {
         "name": "Crème Brûlée",
         "description": "Classic vanilla custard, caramelized sugar crust, seasonal berries",
         "price": 10,
-        "dietary": ["vegetarian", "gluten-free"]
+        "dietary": ["vegetarian", "gluten-free"],
+        "allergens": ["dairy", "eggs"]
       },
       {
         "name": "Seasonal Sorbet",
         "description": "Ask your server for today's selection. Three scoops.",
         "price": 9,
-        "dietary": ["vegan", "gluten-free"]
+        "dietary": ["vegan", "gluten-free"],
+        "allergens": []
+      },
+      {
+        "name": "Cheese Board",
+        "description": "Three rotating artisan cheeses, honeycomb, candied pecans, seasonal jam, house crackers",
+        "price": 18,
+        "dietary": ["vegetarian"],
+        "allergens": ["dairy", "tree nuts", "gluten"]
       }
     ],
 
@@ -150,19 +352,32 @@
       "cocktails": [
         { "name": "Ember Old Fashioned",  "description": "Smoke-infused bourbon, demerara, Angostura bitters, orange twist", "price": 16 },
         { "name": "Ashwood Mule",         "description": "House ginger beer, vodka, lime, fresh mint, candied ginger", "price": 14 },
-        { "name": "Garden Spritz",        "description": "Aperol, prosecco, cucumber, elderflower, soda", "price": 13 }
+        { "name": "Garden Spritz",        "description": "Aperol, prosecco, cucumber, elderflower, soda", "price": 13 },
+        { "name": "Smoked Negroni",       "description": "Gin, Campari, sweet vermouth, smoked rosemary garnish", "price": 15 },
+        { "name": "Passion Paloma",       "description": "Tequila, passion fruit, fresh grapefruit, lime, salted rim", "price": 14 },
+        { "name": "Midnight Manhattan",   "description": "Rye whiskey, black walnut bitters, Luxardo cherry, smoked glass", "price": 17 }
       ],
       "wine_by_glass": [
-        { "name": "Pinot Grigio",  "region": "Veneto, Italy",      "price": 12 },
-        { "name": "Chardonnay",   "region": "Sonoma, CA",          "price": 14 },
-        { "name": "Pinot Noir",   "region": "Willamette Valley, OR","price": 15 },
-        { "name": "Cabernet Sauvignon", "region": "Napa Valley, CA","price": 18 }
+        { "name": "Pinot Grigio",         "region": "Veneto, Italy",          "price": 12 },
+        { "name": "Chardonnay",           "region": "Sonoma, CA",             "price": 14 },
+        { "name": "Rosé",                 "region": "Provence, France",       "price": 13 },
+        { "name": "Pinot Noir",           "region": "Willamette Valley, OR",  "price": 15 },
+        { "name": "Cabernet Sauvignon",   "region": "Napa Valley, CA",        "price": 18 },
+        { "name": "Malbec",               "region": "Mendoza, Argentina",     "price": 13 }
       ],
+      "wine_bottles": {
+        "note": "We carry an extensive bottle list. Ask your server or call ahead and we can recommend pairings for your meal. Bottles range from $45 to $250."
+      },
+      "beer": {
+        "note": "We offer a rotating selection of local Nashville craft beers on draft and in bottles. Ask your server for today's selection. Prices range from $7 to $10."
+      },
       "non_alcoholic": [
-        { "name": "House Lemonade",      "price": 5 },
-        { "name": "Sparkling Water",     "price": 4 },
-        { "name": "Seasonal Iced Tea",   "price": 4 },
-        { "name": "Fresh-Pressed Juice", "price": 7 }
+        { "name": "House Lemonade",             "price": 5 },
+        { "name": "Sparkling Water",            "price": 4 },
+        { "name": "Seasonal Iced Tea",          "price": 4 },
+        { "name": "Fresh-Pressed Juice",        "price": 7 },
+        { "name": "Seedlip Spice (NA cocktail)","price": 10, "description": "A sophisticated non-alcoholic spirit with warm spice notes, served over ice with citrus" },
+        { "name": "House-Made Shrub Soda",      "price": 6,  "description": "Rotating seasonal flavors — ask your server for today's" }
       ]
     }
   },
@@ -170,23 +385,91 @@
   "faqs": [
     {
       "question": "Do you accommodate dietary restrictions?",
-      "answer": "Absolutely. We can accommodate most dietary needs including vegetarian, vegan, and gluten-free. Please inform us when booking or speak with your server. Our kitchen handles nuts, dairy, and shellfish — please alert us to severe allergies."
+      "answer": "Absolutely. We accommodate vegetarian, vegan, gluten-free, and most other dietary needs. Please tell us when booking and remind your server. Our kitchen handles tree nuts, shellfish, dairy, eggs, gluten, soy, and sesame. For severe or life-threatening allergies, please call ahead so our chef can prepare."
+    },
+    {
+      "question": "What is your cancellation policy?",
+      "answer": "We ask for at least 24 hours notice for cancellations. For parties of 5 or more, late cancellations or no-shows may incur a $25 per person fee. To cancel, call us at +16153330142 or email reservations@theemberroom.com."
+    },
+    {
+      "question": "Do you take walk-ins?",
+      "answer": "Yes, walk-ins are always welcome based on availability. Friday and Saturday evenings tend to be fully booked, so we recommend calling ahead. Bar seating is always walk-in only and a great option if we're fully booked in the dining room."
     },
     {
       "question": "Is there parking nearby?",
-      "answer": "Yes. There is a public parking garage on Ashwood Lane one block north, and street parking is available on weeknights. Valet is available Friday and Saturday evenings starting at 6 PM for $12."
+      "answer": "Yes. There is a public parking garage on Ashwood Lane one block north, open until midnight. Street parking is available on weeknights. Valet is available Friday and Saturday from 6 PM for $12. Rideshare drop-off is convenient right out front."
     },
     {
       "question": "Do you have a dress code?",
-      "answer": "Smart casual. We ask that guests avoid athletic wear or beachwear. We want everyone to feel comfortable and enjoy the atmosphere."
+      "answer": "Smart casual. No athletic wear or beachwear please. Think 'nice dinner out.' We want everyone to feel comfortable while respecting the atmosphere."
     },
     {
-      "question": "Can you accommodate large parties or events?",
-      "answer": "Yes! We can host private events for up to 50 guests in our private dining room. Please call us or email reservations@theemberroom.com for event inquiries."
+      "question": "Can you accommodate large parties or private events?",
+      "answer": "Yes! Our private dining room, The Hearth Room, fits up to 50 guests and is perfect for corporate dinners, birthday parties, rehearsal dinners, and more. Please call us or email reservations@theemberroom.com to inquire."
     },
     {
       "question": "Do you have a kids menu?",
-      "answer": "We don't have a dedicated kids menu, but our kitchen is happy to prepare simple dishes for little ones. Please ask your server."
+      "answer": "We don't have a dedicated kids menu, but our kitchen is happy to prepare simple dishes for little ones — plain pasta, grilled chicken, that sort of thing. We also have high chairs and booster seats. Just let your server know."
+    },
+    {
+      "question": "Do you have happy hour?",
+      "answer": "Yes! Happy hour runs Monday through Friday from 5 to 6:30 PM at the bar. Specials include $2 off cocktails, $8 house wine, half-price Truffle Fries and Flatbread, and $5 domestic beers."
+    },
+    {
+      "question": "Do you have outdoor seating?",
+      "answer": "Not currently. All our seating is indoors. We are hoping to add a patio in summer 2027."
+    },
+    {
+      "question": "Are you wheelchair accessible?",
+      "answer": "Yes. Our Ashwood Lane entrance is fully step-free and we have wheelchair-accessible tables and restrooms. Please mention any accessibility needs when booking and we will arrange everything."
+    },
+    {
+      "question": "Can I bring my own wine or a birthday cake?",
+      "answer": "Yes to both. We welcome outside wine for a $25 per bottle corkage fee (up to 2 bottles, not on our wine list). Outside cakes are welcome for a $5 per person plating fee — just let us know in advance so we're prepared."
+    },
+    {
+      "question": "Do you split checks?",
+      "answer": "Yes, we split checks up to 6 ways per table. Just let your server know at the start of the meal."
+    },
+    {
+      "question": "Do you add gratuity automatically?",
+      "answer": "A 20% gratuity is automatically added for parties of 6 or more. For smaller parties, gratuity is at your discretion."
+    },
+    {
+      "question": "Do you have gift cards?",
+      "answer": "Yes! Gift cards are available in any amount at the restaurant or by calling us. They never expire and can be used for food, drinks, or private dining."
+    },
+    {
+      "question": "Do you have live music?",
+      "answer": "Yes — live jazz every Friday and Saturday evening from 7:30 to 10 PM. It adds great ambiance but is kept low enough for conversation."
+    },
+    {
+      "question": "What is the atmosphere like?",
+      "answer": "Warm and intimate — candlelit tables, exposed wood, and a wood-burning hearth. Lively on weekends but always comfortable for conversation. Great for date night, anniversaries, birthdays, business dinners, or a night out."
+    },
+    {
+      "question": "Are you open on holidays?",
+      "answer": "We are closed on Thanksgiving and Christmas Day. On Christmas Eve we close at 9 PM. New Year's Eve we are open until midnight with a special prix fixe menu. Please call ahead to confirm hours on any holiday."
+    },
+    {
+      "question": "What time does the kitchen close?",
+      "answer": "The kitchen closes 30 minutes before we close — so 9:30 PM on weekdays, 10:30 PM on Friday and Saturday, and 8:30 PM on Sunday. Last seating for reservations is also 30 minutes before close."
+    },
+    {
+      "question": "Can I request a specific table?",
+      "answer": "Absolutely — we can't always guarantee it, but we do our best. Window tables are popular for couples, and our private nook tables are great for celebrations or quieter evenings. Just mention your preference when booking."
+    },
+    {
+      "question": "Are pets allowed?",
+      "answer": "We love animals but are not able to accommodate pets in the restaurant. Service animals are always welcome."
+    },
+    {
+      "question": "Can you help with a marriage proposal?",
+      "answer": "We would be honored! Please call us in advance to coordinate privately. We can arrange flowers, a champagne toast, a dedicated server, and make the moment truly special."
+    },
+    {
+      "question": "Do you have non-alcoholic drink options?",
+      "answer": "Yes — beyond soft drinks and juices, we offer a Seedlip Spice non-alcoholic spirit cocktail and a rotating house-made shrub soda. Ask your server for the current flavors."
     }
   ]
 }
