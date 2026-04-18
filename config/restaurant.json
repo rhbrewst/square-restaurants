@@ -47,6 +47,27 @@
     { "id": "T10", "capacity": 2,  "location": "bar",          "notes": "Bar seating, great for solo diners or couples" }
   ],
 
+  "bar": {
+    "seat_count": 4,
+    "reservable": false,
+    "walk_in_only": true,
+    "full_menu_available": true,
+    "note": "The bar has 4 seats and is walk-in only — we do not take reservations for bar seating. The full food and drink menu is available at the bar. It's a great option for solo diners, couples, or anyone who wants a more casual experience. Bar seating is also a good fallback if the dining room is fully booked."
+  },
+
+  "sourcing": {
+    "philosophy": "We are committed to sourcing locally and seasonally wherever possible. The majority of our produce, proteins, and dairy come from Tennessee and the broader mid-South region.",
+    "key_partners": [
+      { "name": "Delvin Farms", "location": "College Grove, TN", "supplies": "Seasonal vegetables and herbs" },
+      { "name": "Bear Creek Farm", "location": "Leiper's Fork, TN", "supplies": "Free-range chicken and heritage pork" },
+      { "name": "Kenny's Farmhouse Cheese", "location": "Austin, KY", "supplies": "Artisan cheeses for the cheese board and kitchen" },
+      { "name": "K&S World Market", "location": "Nashville, TN", "supplies": "Specialty and imported ingredients" }
+    ],
+    "seafood": "Our seafood is sourced through a certified sustainable supplier. Gulf shrimp comes from the Gulf Coast and halibut from the Pacific Northwest.",
+    "beef": "Our ribeye is USDA Prime, dry-aged and sourced from a Midwest beef program with traceable ranch origins.",
+    "note": "Our menu changes seasonally to reflect what's fresh and available from our partners. Servers are always happy to talk through sourcing for any dish."
+  },
+
   "seating": {
     "indoor_only": true,
     "outdoor_seating": false,

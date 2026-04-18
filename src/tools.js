@@ -15,6 +15,43 @@ const store      = require('./reservationStore');
 
 const TOOL_DEFINITIONS = [
   {
+    name: 'get_restaurant_info',
+    description:
+      'Returns detailed information about The Ember Room for a given topic. ' +
+      'Use this when the caller asks about parking, accessibility, seating, bar, ' +
+      'payment, kids facilities, allergens, private dining, special occasions, ' +
+      'corkage, pets, ambiance, happy hour, holiday hours, or local sourcing. ' +
+      'Do NOT use this for menu or reservation questions — use get_menu or check_availability instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        topic: {
+          type: 'string',
+          enum: [
+            'parking',
+            'accessibility',
+            'seating',
+            'bar',
+            'payment',
+            'kids',
+            'allergens',
+            'private_dining',
+            'special_occasions',
+            'corkage',
+            'pets',
+            'ambiance',
+            'happy_hour',
+            'holiday_hours',
+            'sourcing',
+            'faqs',
+          ],
+          description: 'The topic the caller is asking about.',
+        },
+      },
+      required: ['topic'],
+    },
+  },
+  {
     name: 'get_menu',
     description:
       'Returns menu items from The Ember Room. Can return the full menu or a specific section. ' +
@@ -97,6 +134,33 @@ const TOOL_DEFINITIONS = [
 // ─────────────────────────────────────────
 // Tool Handlers
 // ─────────────────────────────────────────
+
+function get_restaurant_info({ topic }) {
+  const topicMap = {
+    parking:          restaurant.parking,
+    accessibility:    restaurant.accessibility,
+    seating:          restaurant.seating,
+    bar:              restaurant.bar,
+    payment:          restaurant.payment,
+    kids:             restaurant.kids,
+    allergens:        restaurant.allergens,
+    private_dining:   restaurant.private_dining,
+    special_occasions: restaurant.special_occasions,
+    corkage:          restaurant.corkage,
+    pets:             restaurant.pets,
+    ambiance:         restaurant.ambiance,
+    happy_hour:       restaurant.happy_hour,
+    holiday_hours:    restaurant.holiday_hours,
+    sourcing:         restaurant.sourcing,
+    faqs:             restaurant.faqs,
+  };
+
+  const data = topicMap[topic];
+  if (!data) {
+    return { error: `Unknown topic "${topic}". Valid topics: ${Object.keys(topicMap).join(', ')}.` };
+  }
+  return { topic, data };
+}
 
 function get_menu({ section }) {
   const { menu } = restaurant;
@@ -265,9 +329,10 @@ function book_reservation({ date, time, party_size, customer_name, customer_phon
 
 function handleToolCall(toolName, toolInput) {
   switch (toolName) {
-    case 'get_menu':           return get_menu(toolInput);
-    case 'check_availability': return check_availability(toolInput);
-    case 'book_reservation':   return book_reservation(toolInput);
+    case 'get_restaurant_info': return get_restaurant_info(toolInput);
+    case 'get_menu':            return get_menu(toolInput);
+    case 'check_availability':  return check_availability(toolInput);
+    case 'book_reservation':    return book_reservation(toolInput);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }

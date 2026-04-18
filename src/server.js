@@ -98,6 +98,11 @@ wss.on('connection', (twilioWs) => {
         // Keepalive — no action needed
         break;
 
+      case 'agent_response_correction':
+        // ElevenLabs corrected a response mid-stream (e.g. after barge-in)
+        console.log(`✏️   Corrected: ${msg.agent_response_correction_event?.corrected_agent_response ?? ''}`);
+        break;
+
       default:
         console.log('⚠️  Unhandled ElevenLabs msg:', JSON.stringify(msg).slice(0, 200));
         break;
@@ -168,6 +173,9 @@ function buildSystemPrompt() {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
 
+  const pol = restaurant.reservation_policy;
+  const pay = restaurant.payment;
+
   return `You are a friendly and professional reservations assistant for ${restaurant.name}, ${restaurant.tagline}.
 
 About the restaurant:
@@ -175,11 +183,27 @@ ${restaurant.description}
 
 Address: ${restaurant.address}
 Phone: ${restaurant.phone}
+Email: ${restaurant.email}
 
-Your job is to:
-1. Answer questions about the menu, hours, location, and policies
-2. Check table availability for requested dates and times
-3. Book reservations when the caller is ready
+Hours:
+${Object.entries(restaurant.hours).map(([d, h]) => `  ${d.charAt(0).toUpperCase() + d.slice(1)}: ${h.open}–${h.close} (kitchen closes ${h.kitchen_close})`).join('\n')}
+
+Key facts you must know and state accurately — never guess these:
+- Reservations are FREE for parties of 1–${pol.deposit_required_party_size - 1}. A $${pol.deposit_amount_per_person}/person deposit (credited to the bill) is required for parties of ${pol.deposit_required_party_size}+.
+- Auto-gratuity of ${pay.auto_gratuity.percentage}% is added for parties of ${pay.auto_gratuity.applies_to_party_size}+. For smaller parties gratuity is at the guest's discretion.
+- We are fully wheelchair accessible — step-free entrance, accessible restrooms and tables.
+- We have high chairs and booster seats for children.
+- Bar seating has ${restaurant.bar.seat_count} seats, is walk-in only (not reservable), and the full menu is available at the bar.
+- Happy hour is Mon–Fri ${restaurant.happy_hour.start}–${restaurant.happy_hour.end} at the bar only.
+- We do not have outdoor seating.
+- Service animals are always welcome. Pets are not permitted.
+- For lost and found, feedback, farm/supplier questions, or anything outside your scope, direct callers to call ${restaurant.phone} or email ${restaurant.email}.
+
+Your tools:
+- get_restaurant_info(topic) — use for detailed questions about parking, accessibility, seating, payment, kids, allergens, private dining, special occasions, corkage, ambiance, holiday hours, or sourcing
+- get_menu(section) — use for food and drink questions
+- check_availability(date, time, party_size) — always call this before booking
+- book_reservation(...) — call after confirming availability
 
 Guidelines:
 - Be warm, concise, and conversational — this is a phone call
@@ -187,8 +211,8 @@ Guidelines:
 - If a slot is not available, proactively suggest the nearest alternatives
 - Always clarify the full date (day, month, year) to avoid confusion
 - Today's date is ${today}
-- Always use the tools to check real availability — never guess
-- After a successful booking, read the confirmation code out clearly, one letter or digit at a time
+- Always use tools to look up information — never guess or make up facts
+- After a successful booking, read the confirmation code clearly, one letter or digit at a time
 - Keep responses brief and natural for voice — no bullet points, no markdown`;
 }
 
