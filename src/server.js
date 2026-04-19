@@ -42,6 +42,9 @@ const {
 const pendingCalls = new Map();
 
 const app = express();
+// Trust Railway's load balancer so X-Forwarded-For is used correctly by
+// express-rate-limit and req.ip. '1' = trust the first proxy hop only.
+app.set('trust proxy', 1);
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
