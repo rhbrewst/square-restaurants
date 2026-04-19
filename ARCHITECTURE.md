@@ -68,14 +68,14 @@ State lives in Postgres (Railway-managed). SMS confirmations and day-before remi
 5. **Tool calls:** ElevenLabs emits `client_tool_call` messages; server runs `handleToolCall` and returns `client_tool_result`. Tool handlers read/write Postgres directly.
 6. **End of call:** Twilio sends `stop` (or either WS closes) → `logger.endCall()` UPDATEs the `calls` row with transcript, tools called, duration, outcome, and cost estimate.
 7. **Post-booking SMS:** `INSERT` on `reservations` fires the `reservation_notify` trigger → `pg_notify('new_reservation', ...)` → the server's dedicated LISTEN client receives it → `sms.sendSmsConfirmation` sends the SMS.
-8. **Reminders:** `pg_cron` runs `queue_upcoming_reminders()` hourly. Reservations due in 23–25h are flipped to `reminder_sent = TRUE` and `pg_notify('reminder_due', ...)` is emitted → server sends SMS.
+8. **Reminders:** `src/scheduler.js` (node-cron) calls `queue_upcoming_reminders()` hourly. Reservations due in 23–25h are flipped to `reminder_sent = TRUE` and `pg_notify('reminder_due', ...)` is emitted → server sends SMS.
 
 ### Call lifecycle (degraded paths)
 
 - **ElevenLabs WS closes unexpectedly mid-call** → `elWs.on('close')` with non-1000/1001 code injects TwiML via Twilio REST (`calls(callSid).update(...)`) that apologises and hangs up, so the caller doesn't hear silence.
 - **Rate limit or invalid signature** → `/incoming-call` responds 429 or 403 before TwiML is generated; Twilio plays its default failure message.
 - **DB down** → `/health` returns 503; Railway restart policy kicks in on repeated failures. In-flight calls still work for read-only tools until they hit a DB query.
-- **SIGTERM (Railway redeploy)** → `shutdown()` stops accepting new WS, waits up to 45s for active calls to drain, then force-closes, closes the LISTEN client, and calls `pool.end()`.
+- **SIGTERM (Railway redeploy)** → `shutdown()` stops accepting new WS, waits up to 45s for active calls to drain, then force-closes, stops the scheduler, closes the LISTEN client, and calls `pool.end()`.
 
 ---
 
@@ -90,6 +90,7 @@ src/
 ├── messageStore.js     — addMessage
 ├── callLogger.js       — per-call session object; inserts calls row at start, UPDATEs at end
 ├── sms.js              — sendSmsConfirmation, sendSmsReminder (Twilio REST)
+├── scheduler.js        — node-cron jobs (reminders, partition rotation, analytics refresh)
 └── conversation.js     — text-only dev harness for Phase 3 (bypasses voice layer)
 
 scripts/
@@ -136,15 +137,17 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 
 The LISTEN client in `server.js` is a **dedicated** `pg.Client`, not checked out from the pool — `LISTEN` requires a long-lived connection. On error it auto-reconnects with a 5s backoff.
 
-### pg_cron jobs
+### Scheduled jobs
 
-Scheduled once manually against the Railway Postgres (not in `migrate.js` because cron schedules aren't idempotent the same way DDL is):
+Railway's managed Postgres image does not ship `pg_cron`, so the three jobs below run from the Node process via `node-cron` (`src/scheduler.js`). The SQL functions they call still live in Postgres — `scheduler.js` only schedules the calls.
 
-| Job | Schedule | What it does |
+| Job | Schedule (UTC) | What it does |
 |---|---|---|
 | `queue-reminders`   | `0 * * * *`   | Flip due reservations' `reminder_sent`, emit `reminder_due` notifies |
 | `ensure-partition`  | `0 0 25 * *`  | Create next month's `calls` partition |
 | `refresh-analytics` | `0 3 * * *`   | `REFRESH MATERIALIZED VIEW CONCURRENTLY call_analytics_daily` |
+
+Jobs are registered after `server.listen()` alongside the LISTEN client, and torn down in `shutdown()` before `pool.end()`. A per-job re-entry guard prevents overlap if a run takes longer than its interval.
 
 ---
 
@@ -193,8 +196,9 @@ These are the things most likely to bite future edits. If you change any of them
 8. **`callLogger` inserts the calls row *synchronously at start*** (via `dbRowPromise`) so the id is available before any transcript data arrives. If that initial insert fails, `endCall` logs and drops the call data — we prefer not to block the phone call on DB availability.
 9. **Partitioning gotcha:** any query against `calls` that doesn't include a `started_at` filter will scan all partitions. The indexes are per-partition, so always scope queries by time range when possible.
 10. **`LISTEN` clients don't auto-reconnect on their own.** The handler in `server.js` sets a 5s timer on `.on('error')`; if you refactor that, preserve the reconnect.
-11. **Graceful shutdown order matters:** close the notify client **before** the pool. Closing the pool first leaves the LISTEN connection dangling and produces an "SSL error: unexpected eof" in Postgres logs.
+11. **Graceful shutdown order matters:** stop the scheduler, then close the notify client, then the pool. Closing the pool first leaves in-flight scheduler queries or the LISTEN connection dangling and produces an "SSL error: unexpected eof" in Postgres logs.
 12. **Do not commit `data/`.** It's gitignored legacy from the JSON-file era. Production reads nothing from it.
+13. **Scheduled jobs run in the Node process, not Postgres.** If the service has zero replicas or is mid-restart at the scheduled time, that tick is skipped — the jobs are idempotent, so a missed run is not fatal, but if you scale to >1 replica you will get duplicate ticks unless you add leader election.
 
 ---
 

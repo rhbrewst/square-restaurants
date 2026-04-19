@@ -9,6 +9,7 @@ const pool       = require('./db');
 const { handleToolCall }                  = require('./tools');
 const { startCall }                       = require('./callLogger');
 const { sendSmsConfirmation, sendSmsReminder } = require('./sms');
+const { startScheduler, stopScheduler }   = require('./scheduler');
 const restaurant = require('../config/restaurant.json');
 
 // ─── Startup env check (Task 2.3) ────────────────────────────────────────────
@@ -404,6 +405,9 @@ async function shutdown(signal) {
   });
 
   clearTimeout(deadline);
+  // Stop scheduled jobs before closing the pool so an in-flight job
+  // doesn't try to query a shut-down pool.
+  await stopScheduler();
   // Close the LISTEN client first so Postgres sees a clean disconnect
   if (notifyClient) {
     try { await notifyClient.end(); } catch (_) {}
@@ -431,5 +435,6 @@ server.listen(PORT, () => {
     startNotificationListener().catch((err) =>
       console.error('Failed to start notification listener:', err.message),
     );
+    startScheduler();
   }
 });

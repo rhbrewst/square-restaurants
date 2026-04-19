@@ -739,16 +739,18 @@ Create **`railway.json`** in the project root:
 ```json
 {
   "$schema": "https://railway.app/railway.schema.json",
-  "build": { "builder": "NIXPACKS" },
+  "build": { "builder": "RAILPACK" },
   "deploy": {
     "startCommand": "node src/server.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5
+    "restartPolicyMaxRetries": 10
   }
 }
 ```
+
+**Note on the builder:** the plan originally specified `NIXPACKS`, but Railway has since migrated to `RAILPACK` as the default builder. Use `RAILPACK` to match the current platform default. If you see a project deployed on NIXPACKS, leaving that alone works too — but new projects should use RAILPACK.
 
 ### Task 5.2 — Run the migration against production
 
@@ -775,17 +777,18 @@ In Railway's service dashboard → **Variables**, add:
 | `NODE_ENV` | `production` |
 | `PORT` | Leave unset — Railway injects it automatically |
 
-### Task 5.4 — Enable pg_cron on Railway Postgres
+### Task 5.4 — Schedule the three recurring DB jobs
 
-In the Railway Postgres service's **Query** tab, run once:
+**Superseded:** the original plan called for `pg_cron`, but Railway's default managed Postgres image does **not** include the `pg_cron` binary (`pg_available_extensions` returns zero rows, not just an unloaded extension). So we run the same three jobs from the Node process via `node-cron` instead. See `src/scheduler.js` and ARCHITECTURE.md §4 "Scheduled jobs".
 
-```sql
-CREATE EXTENSION IF NOT EXISTS pg_cron;
+No Railway-side configuration is required — the scheduler starts automatically alongside the server. Verify after deploy:
 
-SELECT cron.schedule('queue-reminders',   '0 * * * *',  'SELECT queue_upcoming_reminders()');
-SELECT cron.schedule('ensure-partition',  '0 0 25 * *', 'SELECT ensure_next_calls_partition()');
-SELECT cron.schedule('refresh-analytics', '0 3 * * *',  'REFRESH MATERIALIZED VIEW CONCURRENTLY call_analytics_daily');
+```bash
+railway logs | grep -i '\[scheduler\]'
+# expect three lines: registered queue-reminders / ensure-partition / refresh-analytics
 ```
+
+If you ever switch to a Postgres image that includes `pg_cron` (e.g. `supabase/postgres`), replace `src/scheduler.js` with the `cron.schedule(...)` SQL block and delete the node-cron dependency.
 
 ### Task 5.5 — Update Twilio webhook
 
