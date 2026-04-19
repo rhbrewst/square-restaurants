@@ -193,7 +193,7 @@ These are the things most likely to bite future edits. If you change any of them
 5. **The Twilio webhook signature middleware only runs if `PUBLIC_URL` is set.** This is deliberate so local dev without a stable public URL still works, but in production `PUBLIC_URL` **must** be set — the startup env check guarantees that.
 6. **`app.set('trust proxy', 1)` is required on Railway.** Without it, `express-rate-limit` throws a `ValidationError` because `X-Forwarded-For` is unreachable.
 7. **`pendingCalls` Map is keyed by `CallSid`** and populated on `/incoming-call` so we can attach caller number to the WebSocket session on the `start` event. It's deleted on `start` to prevent unbounded growth; orphans (no matching WS) are effectively leaks, but low volume.
-8. **`callLogger` inserts the calls row *synchronously at start*** (via `dbRowPromise`) so the id is available before any transcript data arrives. If that initial insert fails, `endCall` logs and drops the call data — we prefer not to block the phone call on DB availability.
+8. **`callLogger` inserts the calls row *synchronously at start*** (via `dbRowPromise`) so the id is available before any transcript data arrives. If that initial insert fails, `endCall` logs and drops the call data — we prefer not to block the phone call on DB availability. The INSERT explicitly writes `started_at = date_trunc('milliseconds', NOW())` — **not** the column's `DEFAULT NOW()` — because the `endCall` UPDATE uses `(id, started_at)` in its WHERE clause and JS `Date` is ms-precision while Postgres `timestamptz` is µs-precision. Without the truncation, the returned value is rounded to ms when it becomes a JS Date, the stored value keeps µs, and the UPDATE silently matches zero rows — every call becomes an orphan skeleton and no error is logged.
 9. **Partitioning gotcha:** any query against `calls` that doesn't include a `started_at` filter will scan all partitions. The indexes are per-partition, so always scope queries by time range when possible.
 10. **`LISTEN` clients don't auto-reconnect on their own.** The handler in `server.js` sets a 5s timer on `.on('error')`; if you refactor that, preserve the reconnect.
 11. **Graceful shutdown order matters:** stop the scheduler, then close the notify client, then the pool. Closing the pool first leaves in-flight scheduler queries or the LISTEN connection dangling and produces an "SSL error: unexpected eof" in Postgres logs.
@@ -210,7 +210,7 @@ These are the things most likely to bite future edits. If you change any of them
 | 2 — Security | Twilio signature, rate limit, env audit | ✅ Done |
 | 3 — Reliability | `/health`, SIGTERM drain, EL drop recovery, phone validation | ✅ Done |
 | 4 — Caller experience | SMS confirm+reminder, `cancel_reservation` tool | ✅ Done |
-| 5 — Deployment | Railway config, prod migration, pg_cron, Twilio webhook | In progress |
+| 5 — Deployment | Railway config, prod migration, node-cron, Twilio webhook | ✅ Done |
 | 6 — Ops polish | `/analytics` endpoint, hot-reloaded config from DB | Pending |
 
 The full task-by-task playbook is in `PRODUCTION_PLAN.md`; this doc describes the *current* state, not the plan.
