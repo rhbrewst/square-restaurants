@@ -1,38 +1,16 @@
+const pool = require('./db');
+
 /**
- * messageStore.js
- * Persists messages left for management to data/messages.json.
- * Mirrors the pattern in reservationStore.js.
+ * Inserts a new message and returns the full row (including the DB-generated id).
  */
-
-const fs   = require('fs');
-const path = require('path');
-
-const DATA_DIR   = path.join(__dirname, '..', 'data');
-const STORE_PATH = path.join(DATA_DIR, 'messages.json');
-
-function loadAll() {
-  try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-  } catch {
-    return [];
-  }
+async function addMessage({ caller_name, caller_phone, subject, message }) {
+  const result = await pool.query(
+    `INSERT INTO messages (caller_name, caller_phone, subject, message)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, caller_name, caller_phone, subject, message, status, created_at`,
+    [caller_name, caller_phone, subject, message],
+  );
+  return result.rows[0];
 }
 
-function saveAll(messages) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(messages, null, 2));
-}
-
-function addMessage(message) {
-  const all = loadAll();
-  all.push(message);
-  saveAll(all);
-  return message;
-}
-
-function generateId() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return 'MSG-' + Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
-
-module.exports = { loadAll, addMessage, generateId };
+module.exports = { addMessage };

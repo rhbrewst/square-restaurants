@@ -1,15 +1,36 @@
 require('dotenv').config({ override: true });
-const express   = require('express');
-const http      = require('http');
+const express    = require('express');
+const http       = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
-const twilio    = require('twilio');
-const { handleToolCall } = require('./tools');
-const { startCall }      = require('./callLogger');
+const { Client } = require('pg');
+const twilio     = require('twilio');
+const rateLimit  = require('express-rate-limit');
+const pool       = require('./db');
+const { handleToolCall }                  = require('./tools');
+const { startCall }                       = require('./callLogger');
+const { sendSmsConfirmation, sendSmsReminder } = require('./sms');
 const restaurant = require('../config/restaurant.json');
 
-// Capture caller info from the Twilio webhook before the WebSocket upgrades.
-// Keyed by CallSid so the WS handler can look it up from the 'start' event.
-const pendingCalls = new Map();
+// ─── Startup env check (Task 2.3) ────────────────────────────────────────────
+// Crashes in production if any required variable is missing; warns in dev.
+
+const REQUIRED_ENV = [
+  'ELEVENLABS_API_KEY', 'ELEVENLABS_AGENT_ID',
+  'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER',
+  'DATABASE_URL', 'PUBLIC_URL',
+];
+
+for (const key of REQUIRED_ENV) {
+  if (!process.env[key]) {
+    const msg = `Missing required environment variable: ${key}`;
+    if (process.env.NODE_ENV === 'production') {
+      console.error(msg);
+      process.exit(1);
+    } else {
+      console.warn(`⚠️  ${msg}`);
+    }
+  }
+}
 
 const {
   PORT = 3000,
@@ -17,13 +38,44 @@ const {
   ELEVENLABS_AGENT_ID,
 } = process.env;
 
+// Capture caller info from the Twilio webhook before the WebSocket upgrades.
+const pendingCalls = new Map();
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+// ─── Rate limiting (Task 2.2) ─────────────────────────────────────────────────
+// Cap webhook hits to guard against accidental or malicious flooding.
+
+const callLimiter = rateLimit({
+  windowMs:       60_000,
+  max:            20,
+  standardHeaders: true,
+  legacyHeaders:  false,
+  message:        'Too many requests',
+});
+
+app.use('/incoming-call', callLimiter);
+
+// ─── Twilio signature validation (Task 2.1) ───────────────────────────────────
+// Only enforced when PUBLIC_URL is set (always in production; skipped in local dev).
+// Body must already be parsed (urlencoded above) before this middleware runs.
+
+if (process.env.PUBLIC_URL) {
+  app.use('/incoming-call', (req, res, next) => {
+    const valid = twilio.validateExpressRequest(req, process.env.TWILIO_AUTH_TOKEN, {
+      url: process.env.PUBLIC_URL + '/incoming-call',
+    });
+    if (!valid) {
+      console.warn('Rejected request with invalid Twilio signature from', req.ip);
+      return res.status(403).send('Forbidden');
+    }
+    next();
+  });
+}
+
 // ─── Twilio webhook ───────────────────────────────────────────────────────────
-// Twilio hits this when someone calls the restaurant number.
-// We reply with TwiML that opens a Media Stream back to this server.
 
 app.post('/incoming-call', (req, res) => {
   if (req.body.CallSid) {
@@ -39,18 +91,33 @@ app.post('/incoming-call', (req, res) => {
   res.type('text/xml').send(twiml.toString());
 });
 
+// ─── Health check (Task 3.1) ──────────────────────────────────────────────────
+
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', db: 'ok', uptime: process.uptime() });
+  } catch (err) {
+    res.status(503).json({ status: 'error', db: err.message });
+  }
+});
+
 // ─── HTTP + WebSocket server ──────────────────────────────────────────────────
 
 const server = http.createServer(app);
 const wss    = new WebSocketServer({ server, path: '/media-stream' });
 
+// Tracks live WebSocket sessions for graceful shutdown (Task 3.2)
+const activeSessions = new Set();
+
 wss.on('connection', (twilioWs) => {
   console.log('\n📞 Incoming call — connecting to ElevenLabs…');
+  activeSessions.add(twilioWs);
 
   let streamSid = null;
+  let callSid   = null;   // hoisted for ElevenLabs error recovery (Task 3.3)
   const logger  = startCall();
 
-  // Open a WebSocket to ElevenLabs Conversational AI
   const elWs = new WebSocket(
     `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_AGENT_ID}`,
     { headers: { 'xi-api-key': ELEVENLABS_API_KEY } },
@@ -58,9 +125,6 @@ wss.on('connection', (twilioWs) => {
 
   elWs.on('open', () => {
     console.log('✅ ElevenLabs connected');
-
-    // Override the agent's system prompt and opening line at runtime
-    // so we don't have to re-edit the ElevenLabs dashboard after code changes.
     elWs.send(JSON.stringify({
       type: 'conversation_initiation_client_data',
       conversation_config_override: {
@@ -80,15 +144,15 @@ wss.on('connection', (twilioWs) => {
     switch (msg.event) {
       case 'start': {
         streamSid = msg.start.streamSid;
+        callSid   = msg.start.callSid;
         console.log(`📡 Media stream started (${streamSid})`);
         const callInfo = pendingCalls.get(msg.start.callSid) || {};
         pendingCalls.delete(msg.start.callSid);
-        logger.setCallInfo({ ...callInfo, streamSid: msg.start.streamSid });
+        logger.setCallInfo({ ...callInfo, streamSid });
         break;
       }
 
       case 'media':
-        // Twilio sends mulaw 8 kHz audio as base64 — forward it directly.
         if (elWs.readyState === WebSocket.OPEN) {
           elWs.send(JSON.stringify({ user_audio_chunk: msg.media.payload }));
         }
@@ -96,7 +160,7 @@ wss.on('connection', (twilioWs) => {
 
       case 'stop':
         console.log('📵 Call ended by Twilio');
-        logger.endCall();
+        logger.endCall().catch((e) => console.error('endCall error:', e));
         elWs.close();
         break;
     }
@@ -104,7 +168,7 @@ wss.on('connection', (twilioWs) => {
 
   // ── ElevenLabs → Twilio ───────────────────────────────────────────────────
 
-  elWs.on('message', (raw) => {
+  elWs.on('message', async (raw) => {
     const msg = JSON.parse(raw);
 
     switch (msg.type) {
@@ -114,20 +178,13 @@ wss.on('connection', (twilioWs) => {
         break;
 
       case 'ping':
-        // Keepalive — no action needed
         break;
 
       case 'agent_response_correction':
-        // ElevenLabs corrected a response mid-stream (e.g. after barge-in)
         console.log(`✏️   Corrected: ${msg.agent_response_correction_event?.corrected_agent_response ?? ''}`);
         break;
 
-      default:
-        console.log('⚠️  Unhandled ElevenLabs msg:', JSON.stringify(msg).slice(0, 200));
-        break;
-
       case 'audio':
-        // Forward agent speech back to the caller.
         if (twilioWs.readyState === WebSocket.OPEN) {
           twilioWs.send(JSON.stringify({
             event:     'media',
@@ -138,7 +195,6 @@ wss.on('connection', (twilioWs) => {
         break;
 
       case 'interruption':
-        // Caller spoke over the agent — clear Twilio's playback buffer immediately.
         if (twilioWs.readyState === WebSocket.OPEN) {
           twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
         }
@@ -161,35 +217,67 @@ wss.on('connection', (twilioWs) => {
       case 'client_tool_call': {
         const { tool_call_id, tool_name, parameters } = msg.client_tool_call;
         console.log(`\n🔧  Tool  : ${tool_name}(${JSON.stringify(parameters)})`);
-
-        const t0     = Date.now();
-        const result = handleToolCall(tool_name, parameters);
-        const latency = Date.now() - t0;
-
-        console.log(`📋  Result: ${JSON.stringify(result).slice(0, 120)}…\n`);
-        logger.logToolCall(tool_name, parameters, result, latency);
-
-        elWs.send(JSON.stringify({
-          type:         'client_tool_result',
-          tool_call_id,
-          result:       JSON.stringify(result),
-          is_error:     false,
-        }));
+        try {
+          const t0      = Date.now();
+          const result  = await handleToolCall(tool_name, parameters);
+          const latency = Date.now() - t0;
+          console.log(`📋  Result: ${JSON.stringify(result).slice(0, 120)}…\n`);
+          logger.logToolCall(tool_name, parameters, result, latency);
+          elWs.send(JSON.stringify({
+            type: 'client_tool_result', tool_call_id,
+            result: JSON.stringify(result), is_error: false,
+          }));
+        } catch (err) {
+          console.error(`Tool ${tool_name} threw:`, err.message);
+          logger.logError(`tool_${tool_name}`, err);
+          elWs.send(JSON.stringify({
+            type: 'client_tool_result', tool_call_id,
+            result: JSON.stringify({ error: 'An internal error occurred. Please try again.' }),
+            is_error: true,
+          }));
+        }
         break;
       }
+
+      default:
+        console.log('⚠️  Unhandled ElevenLabs msg:', JSON.stringify(msg).slice(0, 200));
+        break;
     }
   });
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
 
   twilioWs.on('close', () => {
-    logger.endCall();
+    activeSessions.delete(twilioWs);
+    logger.endCall().catch((e) => console.error('endCall error:', e));
     if (elWs.readyState !== WebSocket.CLOSED) elWs.close();
   });
 
-  elWs.on('close', (code, reason) => {
-    console.log(`🔌 ElevenLabs disconnected — code: ${code}, reason: ${reason.toString() || '(none)'}`);
-    logger.endCall();
+  // Task 3.3 — ElevenLabs drop recovery:
+  // If ElevenLabs closes unexpectedly mid-call, inject a TwiML apology via the
+  // Twilio REST API so the caller hears something instead of silence.
+  elWs.on('close', async (code, reason) => {
+    const reasonStr    = reason.toString() || '(none)';
+    const isUnexpected = code !== 1000 && code !== 1001;
+    console.log(`🔌 ElevenLabs disconnected — code: ${code}, reason: ${reasonStr}`);
+
+    if (isUnexpected) {
+      logger.logError('elevenlabs_ws', { code, reason: reasonStr });
+    }
+
+    logger.endCall().catch((e) => console.error('endCall error:', e));
+
+    if (isUnexpected && twilioWs.readyState === WebSocket.OPEN && callSid) {
+      try {
+        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+        await twilioClient.calls(callSid).update({
+          twiml: `<Response><Say voice="Polly.Joanna">I'm sorry, I'm having a technical difficulty. Please call back in a moment and we'll be happy to help you.</Say><Hangup/></Response>`,
+        });
+      } catch (e) {
+        console.error('Failed to inject TwiML fallback:', e.message);
+      }
+    }
+
     if (twilioWs.readyState !== WebSocket.CLOSED) twilioWs.close();
   });
 
@@ -197,6 +285,7 @@ wss.on('connection', (twilioWs) => {
     console.error('Twilio WS error:', err.message);
     logger.logError('twilio_ws', err);
   });
+
   elWs.on('error', (err) => {
     console.error('ElevenLabs error:', err.message);
     logger.logError('elevenlabs_ws', err);
@@ -209,7 +298,6 @@ function buildSystemPrompt() {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
-
   const pol = restaurant.reservation_policy;
   const pay = restaurant.payment;
 
@@ -241,6 +329,7 @@ Your tools:
 - get_menu(section) — use for food and drink questions
 - check_availability(date, time, party_size) — always call this before booking
 - book_reservation(...) — call after confirming availability
+- cancel_reservation(confirmation_code, customer_phone) — use when a caller wants to cancel; verify their code and phone first, then confirm details before cancelling
 - leave_message(caller_name, caller_phone, subject, message) — use when someone has feedback, a complaint, a lost item, a private event inquiry, or any request that needs management follow-up. Always get their name and number first.
 
 Guidelines:
@@ -254,6 +343,67 @@ Guidelines:
 - Keep responses brief and natural for voice — no bullet points, no markdown`;
 }
 
+// ─── Postgres LISTEN/NOTIFY (Task 1.6 / Task 4.1) ────────────────────────────
+
+async function startNotificationListener() {
+  const notifyClient = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  });
+  await notifyClient.connect();
+  await notifyClient.query('LISTEN new_reservation');
+  await notifyClient.query('LISTEN reminder_due');
+
+  notifyClient.on('notification', async (msg) => {
+    const payload = JSON.parse(msg.payload);
+    try {
+      if (msg.channel === 'new_reservation') {
+        await sendSmsConfirmation(payload);
+        console.log('📱 SMS confirmation sent:', payload.id);
+      }
+      if (msg.channel === 'reminder_due') {
+        await sendSmsReminder(payload);
+        console.log('📱 SMS reminder sent:', payload.id);
+      }
+    } catch (err) {
+      console.error(`SMS error (${msg.channel}):`, err.message);
+    }
+  });
+
+  notifyClient.on('error', (err) => {
+    console.error('Notification listener error — reconnecting in 5s:', err.message);
+    setTimeout(startNotificationListener, 5_000);
+  });
+}
+
+// ─── Graceful shutdown (Task 3.2) ─────────────────────────────────────────────
+// Railway sends SIGTERM before stopping or redeploying. We drain active calls
+// (up to 45s) before closing the DB pool and exiting cleanly.
+
+async function shutdown(signal) {
+  console.log(`\n${signal} received — draining ${activeSessions.size} active call(s)…`);
+  server.close();
+
+  const deadline = setTimeout(() => {
+    console.warn('Drain deadline reached — force-closing remaining sessions');
+    for (const ws of activeSessions) ws.close();
+  }, 45_000);
+
+  await new Promise((resolve) => {
+    const check = setInterval(() => {
+      if (activeSessions.size === 0) { clearInterval(check); resolve(); }
+    }, 500);
+  });
+
+  clearTimeout(deadline);
+  await pool.end();
+  console.log('Shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () => {
@@ -261,6 +411,13 @@ server.listen(PORT, () => {
   console.log(`  ${restaurant.name} — Voice Server`);
   console.log(`  Listening on port ${PORT}`);
   console.log(`  POST /incoming-call  ← point Twilio webhook here`);
+  console.log(`  GET  /health`);
   console.log(`  WS   /media-stream  ← Twilio Media Streams`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+
+  if (process.env.DATABASE_URL) {
+    startNotificationListener().catch((err) =>
+      console.error('Failed to start notification listener:', err.message),
+    );
+  }
 });

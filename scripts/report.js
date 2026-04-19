@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
  * Usage:
- *   node scripts/report.js               # all-time summary
- *   node scripts/report.js --days 7      # last 7 days
+ *   node scripts/report.js               # last 30 days
+ *   node scripts/report.js --days 7      # last N days
  *   node scripts/report.js --month 2026-04  # specific month
  */
 
-const fs   = require('fs');
-const path = require('path');
-
-const LOG_FILE = path.join(__dirname, '../data/calls.jsonl');
+require('dotenv').config();
+const pool = require('../src/db');
 
 // ── Args ──────────────────────────────────────────────────────────────────────
 
@@ -22,134 +20,187 @@ function argVal(arr, flag) {
   return i !== -1 ? arr[i + 1] : null;
 }
 
-// ── Load & filter calls ───────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
-if (!fs.existsSync(LOG_FILE)) {
-  console.log('No call log found yet. Calls will be logged to data/calls.jsonl once the server receives its first call.');
-  process.exit(0);
-}
+async function main() {
+  // Build date range filter
+  let dateFilter  = '';
+  let dateParams  = [];
+  let periodLabel = 'All time';
 
-let calls = fs
-  .readFileSync(LOG_FILE, 'utf8')
-  .trim()
-  .split('\n')
-  .filter(Boolean)
-  .map(line => JSON.parse(line));
-
-const cutoff = days
-  ? new Date(Date.now() - Number(days) * 86400_000).toISOString()
-  : month
-    ? new Date(`${month}-01`).toISOString()
-    : null;
-
-const cutoffEnd = month
-  ? new Date(new Date(`${month}-01`).setMonth(new Date(`${month}-01`).getMonth() + 1)).toISOString()
-  : null;
-
-if (cutoff)    calls = calls.filter(c => c.started_at >= cutoff);
-if (cutoffEnd) calls = calls.filter(c => c.started_at <  cutoffEnd);
-
-if (!calls.length) {
-  console.log('No calls found for the specified period.');
-  process.exit(0);
-}
-
-// ── Aggregate ─────────────────────────────────────────────────────────────────
-
-const totalCalls    = calls.length;
-const totalDuration = calls.reduce((s, c) => s + (c.duration_seconds || 0), 0);
-const totalCost     = calls.reduce((s, c) => s + (c.cost_estimate_usd || 0), 0);
-const avgDuration   = Math.round(totalDuration / totalCalls);
-
-const outcomes = tally(calls, c => c.outcome);
-const topics   = tally(flatMap(calls, c => c.inquiry_topics), v => v);
-const tools    = tally(flatMap(calls, c => c.tools_called.map(t => t.tool)), v => v);
-
-const reservations = calls.filter(c => c.reservation).map(c => ({
-  date:              c.reservation.date,
-  time:              c.reservation.time,
-  party_size:        c.reservation.party_size,
-  customer_name:     c.reservation.customer_name,
-  confirmation_code: c.reservation.confirmation_code,
-  call_date:         c.started_at.slice(0, 10),
-}));
-
-const messages = calls.filter(c => c.message_left).map(c => ({
-  subject:    c.message_left.subject,
-  message_id: c.message_left.message_id,
-  call_date:  c.started_at.slice(0, 10),
-}));
-
-const errors = calls.filter(c => c.errors.length > 0).length;
-
-// ── Print report ──────────────────────────────────────────────────────────────
-
-const period = days   ? `Last ${days} days`
-             : month  ? `Month: ${month}`
-             :          'All time';
-
-line('═', 56);
-console.log(`  SQUARE RESTAURANTS — CALL ANALYTICS REPORT`);
-console.log(`  ${period}`);
-line('═', 56);
-
-const twilioTotal     = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.twilio     || 0), 0);
-const elevenLabsTotal = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.elevenlabs || 0), 0);
-const claudeTotal     = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.claude     || 0), 0);
-
-section('VOLUME & COST');
-row('Total calls',          totalCalls);
-row('Total duration',       fmtDuration(totalDuration));
-row('Average call length',  fmtDuration(avgDuration));
-row('Total cost (est.)',    `$${totalCost.toFixed(4)} USD`);
-row('  ↳ Twilio',           `$${twilioTotal.toFixed(4)}  ($0.0085/min)`);
-row('  ↳ ElevenLabs',       `$${elevenLabsTotal.toFixed(4)}  ($0.10/min)`);
-row('  ↳ Claude',           `$${claudeTotal.toFixed(4)}  (~$0.00735/min)`);
-row('Calls with errors',    errors);
-
-section('OUTCOMES');
-for (const [outcome, count] of sorted(outcomes)) {
-  row(fmtOutcome(outcome), `${count}  (${pct(count, totalCalls)})`);
-}
-
-section('INQUIRY TOPICS  (get_restaurant_info calls)');
-if (Object.keys(topics).length) {
-  for (const [topic, count] of sorted(topics)) {
-    row(topic, `${count}  (${pct(count, Object.values(topics).reduce((a, b) => a + b, 0))})`);
+  if (days) {
+    dateFilter  = `WHERE call_date >= NOW() - ($1 || ' days')::interval`;
+    dateParams  = [parseInt(days)];
+    periodLabel = `Last ${days} days`;
+  } else if (month) {
+    dateFilter  = `WHERE call_date >= $1 AND call_date < $1::date + interval '1 month'`;
+    dateParams  = [`${month}-01`];
+    periodLabel = `Month: ${month}`;
+  } else {
+    // Default to last 30 days for the analytics view query
+    dateFilter  = `WHERE call_date >= NOW() - interval '30 days'`;
+    dateParams  = [];
+    periodLabel = 'Last 30 days';
   }
-} else {
-  console.log('  none');
-}
 
-section('TOOL USAGE');
-for (const [tool, count] of sorted(tools)) {
-  row(tool, count);
-}
+  // ── Aggregates from materialized view ──
+  const viewResult = await pool.query(
+    `SELECT
+       SUM(total_calls)          AS total_calls,
+       SUM(total_seconds)        AS total_seconds,
+       ROUND(AVG(avg_seconds))   AS avg_seconds,
+       SUM(total_cost_usd)       AS total_cost_usd,
+       SUM(bookings)             AS bookings,
+       SUM(messages_left)        AS messages_left,
+       SUM(info_calls)           AS info_calls,
+       SUM(no_action)            AS no_action,
+       SUM(calls_with_errors)    AS calls_with_errors
+     FROM call_analytics_daily
+     ${dateFilter}`,
+    dateParams,
+  );
 
-section(`RESERVATIONS BOOKED  (${reservations.length})`);
-if (reservations.length) {
-  for (const r of reservations.slice(-10)) {
-    console.log(`  ${r.call_date}  ${r.date} ${r.time}  party of ${r.party_size}  — ${r.customer_name}  [${r.confirmation_code}]`);
+  const agg = viewResult.rows[0];
+
+  if (!agg || !agg.total_calls) {
+    console.log('No calls found for the specified period.');
+    await pool.end();
+    return;
   }
-  if (reservations.length > 10) console.log(`  … and ${reservations.length - 10} earlier`);
-} else {
-  console.log('  none');
-}
 
-section(`MESSAGES LEFT FOR MANAGEMENT  (${messages.length})`);
-if (messages.length) {
-  for (const m of messages.slice(-10)) {
-    console.log(`  ${m.call_date}  ${m.subject}  [${m.message_id}]`);
+  // ── Per-call detail from calls table (for cost breakdown + detailed sections) ──
+  let callsFilter = '';
+  let callsParams = [];
+
+  if (days) {
+    callsFilter  = `WHERE started_at >= NOW() - ($1 || ' days')::interval`;
+    callsParams  = [parseInt(days)];
+  } else if (month) {
+    callsFilter  = `WHERE started_at >= $1 AND started_at < $1::timestamptz + interval '1 month'`;
+    callsParams  = [`${month}-01`];
+  } else {
+    callsFilter  = `WHERE started_at >= NOW() - interval '30 days'`;
+    callsParams  = [];
   }
-  if (messages.length > 10) console.log(`  … and ${messages.length - 10} earlier`);
-} else {
-  console.log('  none');
-}
 
-line('─', 56);
-console.log(`  Log file: ${LOG_FILE}`);
-console.log(`  Rates: Twilio $0.0085/min · ElevenLabs $0.10/min · Claude ~$0.00735/min`);
-console.log(`  Source: cost-dashboard.html · update rates in src/callLogger.js if they change.\n`);
+  const callsResult = await pool.query(
+    `SELECT outcome, tools_called, inquiry_topics, cost_breakdown_usd,
+            started_at, reservation_id
+     FROM calls
+     ${callsFilter}
+     ORDER BY started_at`,
+    callsParams,
+  );
+
+  const calls = callsResult.rows;
+
+  // Per-provider cost totals
+  const twilioTotal     = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.twilio     || 0), 0);
+  const elevenLabsTotal = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.elevenlabs || 0), 0);
+  const claudeTotal     = calls.reduce((s, c) => s + (c.cost_breakdown_usd?.claude     || 0), 0);
+
+  // Topic and tool tallies from JSONB
+  const topics = {};
+  const tools  = {};
+  for (const c of calls) {
+    for (const topic of (c.inquiry_topics || [])) {
+      topics[topic] = (topics[topic] || 0) + 1;
+    }
+    for (const t of (c.tools_called || [])) {
+      tools[t.tool] = (tools[t.tool] || 0) + 1;
+    }
+  }
+
+  // Recent reservations booked — join on reservation_id
+  const resResult = await pool.query(
+    `SELECT r.id, r.date, r.time, r.party_size, r.customer_name, c.started_at
+     FROM reservations r
+     JOIN calls c ON c.reservation_id = r.id
+     ${callsFilter.replace('started_at', 'c.started_at')}
+     ORDER BY c.started_at DESC
+     LIMIT 10`,
+    callsParams,
+  );
+
+  // Recent messages left
+  const msgResult = await pool.query(
+    `SELECT m.id, m.subject, c.started_at
+     FROM messages m
+     JOIN calls c ON c.message_id = m.id
+     ${callsFilter.replace('started_at', 'c.started_at')}
+     ORDER BY c.started_at DESC
+     LIMIT 10`,
+    callsParams,
+  );
+
+  // ── Print report ──────────────────────────────────────────────────────────
+  const totalCalls    = Number(agg.total_calls);
+  const totalSeconds  = Number(agg.total_seconds) || 0;
+  const avgSeconds    = Number(agg.avg_seconds) || 0;
+  const totalCost     = parseFloat(agg.total_cost_usd) || 0;
+
+  line('═', 56);
+  console.log(`  SQUARE RESTAURANTS — CALL ANALYTICS REPORT`);
+  console.log(`  ${periodLabel}`);
+  line('═', 56);
+
+  section('VOLUME & COST');
+  row('Total calls',         totalCalls);
+  row('Total duration',      fmtDuration(totalSeconds));
+  row('Average call length', fmtDuration(avgSeconds));
+  row('Total cost (est.)',   `$${totalCost.toFixed(4)} USD`);
+  row('  ↳ Twilio',          `$${twilioTotal.toFixed(4)}  ($0.0085/min)`);
+  row('  ↳ ElevenLabs',      `$${elevenLabsTotal.toFixed(4)}  ($0.10/min)`);
+  row('  ↳ Claude',          `$${claudeTotal.toFixed(4)}  (~$0.00735/min)`);
+  row('Calls with errors',   Number(agg.calls_with_errors) || 0);
+
+  section('OUTCOMES');
+  row(fmtOutcome('reservation_booked'), `${agg.bookings}  (${pct(agg.bookings, totalCalls)})`);
+  row(fmtOutcome('message_left'),       `${agg.messages_left}  (${pct(agg.messages_left, totalCalls)})`);
+  row(fmtOutcome('info_provided'),      `${agg.info_calls}  (${pct(agg.info_calls, totalCalls)})`);
+  row(fmtOutcome('no_action'),          `${agg.no_action}  (${pct(agg.no_action, totalCalls)})`);
+
+  section('INQUIRY TOPICS  (get_restaurant_info calls)');
+  const topicEntries = sorted(topics);
+  if (topicEntries.length) {
+    const topicTotal = Object.values(topics).reduce((a, b) => a + b, 0);
+    for (const [topic, count] of topicEntries) {
+      row(topic, `${count}  (${pct(count, topicTotal)})`);
+    }
+  } else {
+    console.log('  none');
+  }
+
+  section('TOOL USAGE');
+  for (const [tool, count] of sorted(tools)) {
+    row(tool, count);
+  }
+
+  const reservations = resResult.rows;
+  section(`RESERVATIONS BOOKED  (${Number(agg.bookings)})`);
+  if (reservations.length) {
+    for (const r of reservations) {
+      console.log(`  ${r.started_at.toISOString().slice(0, 10)}  ${r.date} ${r.time}  party of ${r.party_size}  — ${r.customer_name}  [${r.id}]`);
+    }
+  } else {
+    console.log('  none');
+  }
+
+  const messages = msgResult.rows;
+  section(`MESSAGES LEFT FOR MANAGEMENT  (${Number(agg.messages_left)})`);
+  if (messages.length) {
+    for (const m of messages) {
+      console.log(`  ${m.started_at.toISOString().slice(0, 10)}  ${m.subject}  [${m.id}]`);
+    }
+  } else {
+    console.log('  none');
+  }
+
+  line('─', 56);
+  console.log(`  Source: call_analytics_daily view + calls table`);
+  console.log(`  Rates: Twilio $0.0085/min · ElevenLabs $0.10/min · Claude ~$0.00735/min`);
+  console.log(`  Update rates in src/callLogger.js if they change.\n`);
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -161,7 +212,7 @@ function section(title) {
 }
 
 function row(label, value) {
-  console.log(`  ${label.padEnd(30)} ${value}`);
+  console.log(`  ${String(label).padEnd(30)} ${value}`);
 }
 
 function line(char, len) {
@@ -169,7 +220,7 @@ function line(char, len) {
 }
 
 function pct(n, total) {
-  return total ? `${Math.round(n / total * 100)}%` : '0%';
+  return total ? `${Math.round(Number(n) / Number(total) * 100)}%` : '0%';
 }
 
 function fmtDuration(secs) {
@@ -180,23 +231,19 @@ function fmtDuration(secs) {
 }
 
 function fmtOutcome(o) {
-  return { reservation_booked: 'Reservation booked', message_left: 'Message left for management',
-           info_provided: 'Info / menu inquiry', no_action: 'No action' }[o] || o;
-}
-
-function tally(items, keyFn = v => v) {
-  const counts = {};
-  for (const item of items) {
-    const k = keyFn(item);
-    counts[k] = (counts[k] || 0) + 1;
-  }
-  return counts;
-}
-
-function flatMap(arr, fn) {
-  return arr.flatMap(fn);
+  return {
+    reservation_booked: 'Reservation booked',
+    message_left:       'Message left for management',
+    info_provided:      'Info / menu inquiry',
+    no_action:          'No action',
+  }[o] || o;
 }
 
 function sorted(obj) {
   return Object.entries(obj).sort(([, a], [, b]) => b - a);
 }
+
+main().catch((err) => {
+  console.error('Report failed:', err.message);
+  process.exit(1);
+}).finally(() => pool.end());
