@@ -27,8 +27,12 @@ function startCall() {
 
   // Insert the call row immediately so we have a DB id to UPDATE at end.
   // Other fields are filled in via UPDATE in endCall().
+  // NOTE: started_at is truncated to ms precision on return so the JS Date
+  // round-trips exactly — otherwise the UPDATE's `WHERE started_at = $N`
+  // never matches (JS Date is ms, Postgres timestamptz is μs).
   const dbRowPromise = pool.query(
-    `INSERT INTO calls DEFAULT VALUES RETURNING id, started_at`,
+    `INSERT INTO calls DEFAULT VALUES
+     RETURNING id, date_trunc('milliseconds', started_at) AS started_at`,
   ).then((r) => r.rows[0]).catch((err) => {
     console.error('Failed to create call row in DB:', err.message);
     return null;
