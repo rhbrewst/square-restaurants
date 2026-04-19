@@ -344,9 +344,13 @@ Guidelines:
 }
 
 // ─── Postgres LISTEN/NOTIFY (Task 1.6 / Task 4.1) ────────────────────────────
+// notifyClient is module-scoped so shutdown() can close it cleanly, preventing
+// the "SSL error: unexpected eof" that appears in Postgres logs on hard exit.
+
+let notifyClient = null;
 
 async function startNotificationListener() {
-  const notifyClient = new Client({
+  notifyClient = new Client({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   });
@@ -372,6 +376,7 @@ async function startNotificationListener() {
 
   notifyClient.on('error', (err) => {
     console.error('Notification listener error — reconnecting in 5s:', err.message);
+    notifyClient = null;
     setTimeout(startNotificationListener, 5_000);
   });
 }
@@ -396,6 +401,10 @@ async function shutdown(signal) {
   });
 
   clearTimeout(deadline);
+  // Close the LISTEN client first so Postgres sees a clean disconnect
+  if (notifyClient) {
+    try { await notifyClient.end(); } catch (_) {}
+  }
   await pool.end();
   console.log('Shutdown complete');
   process.exit(0);
