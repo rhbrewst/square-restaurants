@@ -1,4 +1,6 @@
 const twilio = require('twilio');
+const { DateTime } = require('luxon');
+const restaurant = require('../config/restaurant.json');
 
 const FROM = process.env.TWILIO_PHONE_NUMBER;
 
@@ -15,10 +17,9 @@ function formatDateTime(date, time) {
   // Postgres DATE serialises to "YYYY-MM-DD" in NOTIFY payloads; TIME to "HH:MM:SS".
   const d = String(date).slice(0, 10);
   const t = String(time).slice(0, 5);
-  return new Date(`${d}T${t}`).toLocaleString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-  });
+  return DateTime
+    .fromFormat(`${d} ${t}`, 'yyyy-MM-dd HH:mm', { zone: restaurant.timezone })
+    .toFormat('cccc, LLLL d, h:mm a');
 }
 
 async function sendSmsConfirmation({ id, customer_name, customer_phone, date, time, party_size, table_location }) {

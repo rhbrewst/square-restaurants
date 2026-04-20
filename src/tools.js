@@ -6,6 +6,7 @@
  * HANDLERS    — called when Claude returns a tool_use block.
  */
 
+const { DateTime } = require('luxon');
 const restaurant   = require('../config/restaurant.json');
 const store        = require('./reservationStore');
 const messageStore = require('./messageStore');
@@ -176,17 +177,20 @@ async function check_availability({ date, time, party_size }) {
     return { available: false, reason: 'Time must be in HH:MM 24-hour format.' };
   }
 
-  const requested = new Date(`${date}T${time}:00`);
-  const now        = new Date();
+  const requested = DateTime.fromFormat(
+    `${date} ${time}`, 'yyyy-MM-dd HH:mm',
+    { zone: restaurant.timezone },
+  );
+  const now = DateTime.now().setZone(restaurant.timezone);
 
-  if (isNaN(requested.getTime())) {
+  if (!requested.isValid) {
     return { available: false, reason: 'Invalid date or time.' };
   }
   if (requested <= now) {
     return { available: false, reason: 'Reservation must be in the future.' };
   }
 
-  const dayName = requested.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  const dayName = requested.toFormat('cccc').toLowerCase();
   const hours   = restaurant.hours[dayName];
 
   if (!hours) {
@@ -327,8 +331,12 @@ async function cancel_reservation({ confirmation_code, customer_phone, reason })
     return { success: false, reason: 'Phone number does not match the reservation. Please double-check.' };
   }
 
-  const resTime    = new Date(`${String(res.date).slice(0, 10)}T${String(res.time).slice(0, 5)}`);
-  const hoursUntil = (resTime - new Date()) / 3_600_000;
+  const resTime = DateTime.fromFormat(
+    `${String(res.date).slice(0, 10)} ${String(res.time).slice(0, 5)}`,
+    'yyyy-MM-dd HH:mm',
+    { zone: restaurant.timezone },
+  );
+  const hoursUntil = resTime.diffNow('hours').hours;
   const lateFee    = hoursUntil < 24 && res.party_size >= 5;
 
   await pool.query(
