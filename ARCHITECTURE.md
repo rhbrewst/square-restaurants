@@ -212,7 +212,7 @@ These are the things most likely to bite future edits. If you change any of them
 | 3 — Reliability | `/health`, SIGTERM drain, EL drop recovery, phone validation | ✅ Done |
 | 4 — Caller experience | SMS confirm+reminder, `cancel_reservation` tool | ✅ Done |
 | 5 — Deployment | Railway config, prod migration, node-cron, Twilio webhook | ✅ Done |
-| 6 — Ops polish | `/analytics` endpoint, hot-reloaded config from DB | Pending |
+| 6 — Multi-tenant refactor | `accounts`/`locations`, per-tenant Twilio, hot-reloaded config, `/analytics` by location | In progress |
 
 The full task-by-task playbook is in `PRODUCTION_PLAN.md`; this doc describes the *current* state, not the plan.
 
