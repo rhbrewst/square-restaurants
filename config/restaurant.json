@@ -1,6 +1,7 @@
 {
   "name": "The Ember Room",
   "tagline": "Wood-fired American cuisine in the heart of the city",
+  "timezone": "America/Chicago",
   "address": "142 Ashwood Lane, Nashville, TN 37201",
   "phone": "+16153330142",
   "email": "reservations@theemberroom.com",

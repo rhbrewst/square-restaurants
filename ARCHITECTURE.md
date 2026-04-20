@@ -199,6 +199,7 @@ These are the things most likely to bite future edits. If you change any of them
 11. **Graceful shutdown order matters:** stop the scheduler, then close the notify client, then the pool. Closing the pool first leaves in-flight scheduler queries or the LISTEN connection dangling and produces an "SSL error: unexpected eof" in Postgres logs.
 12. **Do not commit `data/`.** It's gitignored legacy from the JSON-file era. Production reads nothing from it.
 13. **Scheduled jobs run in the Node process, not Postgres.** If the service has zero replicas or is mid-restart at the scheduled time, that tick is skipped — the jobs are idempotent, so a missed run is not fatal, but if you scale to >1 replica you will get duplicate ticks unless you add leader election.
+14. **Tenant-local "now" is derived from `restaurant.timezone`, not the server clock.** `buildSystemPrompt` (`src/systemPrompt.js`), `check_availability`, `cancel_reservation`'s `hoursUntil` calc, and SMS date formatting all compute "now" via Luxon `DateTime.now().setZone(restaurant.timezone)`. The server runs in UTC on Railway; using `new Date()` here silently shifts day-of-week and past/future decisions by the UTC offset. When multi-tenant lands (Phase 6), this source becomes `location.timezone`.
 
 ---
 
