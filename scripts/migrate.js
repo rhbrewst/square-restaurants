@@ -266,6 +266,123 @@ $$;
 --   SELECT cron.schedule('queue-reminders',   '0 * * * *',  'SELECT queue_upcoming_reminders()');
 --   SELECT cron.schedule('ensure-partition',  '0 0 25 * *', 'SELECT ensure_next_calls_partition()');
 --   SELECT cron.schedule('refresh-analytics', '0 3 * * *',  'REFRESH MATERIALIZED VIEW CONCURRENTLY call_analytics_daily');
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Phase 6.2 — Multi-tenant additive schema
+-- Every change below is additive: new tables, nullable FK columns on existing
+-- tables, no reshaping of existing constraints. The old single-tenant code can
+-- keep running after this applies; it just writes location_id = NULL until 6.3
+-- backfills and 6.4 threads the FK through the app.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ACCOUNTS — owner / billing layer. One owner may operate many locations.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS accounts (
+  id             TEXT        PRIMARY KEY,          -- slug, e.g. 'ember-group'
+  name           TEXT        NOT NULL,
+  contact_email  TEXT,
+  contact_phone  TEXT,
+  active         BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS accounts_updated_at ON accounts;
+CREATE TRIGGER accounts_updated_at
+  BEFORE UPDATE ON accounts
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- LOCATIONS — per-tenant venue. Neutral name so salons/spas/barbershops fit
+-- later without renaming every FK. The vertical column is the seam where
+-- future verticals hang.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS locations (
+  id                   TEXT        PRIMARY KEY,    -- slug, e.g. 'ember-room'
+  account_id           TEXT        NOT NULL REFERENCES accounts(id),
+  vertical             TEXT        NOT NULL DEFAULT 'restaurant'
+                                   CHECK (vertical IN ('restaurant')),
+  name                 TEXT        NOT NULL,
+  twilio_number        TEXT        NOT NULL UNIQUE,
+  sms_from_number      TEXT,
+  elevenlabs_agent_id  TEXT,
+  elevenlabs_voice_id  TEXT,
+  enabled_tools        TEXT[]      NOT NULL DEFAULT ARRAY[
+                                     'get_restaurant_info','get_menu',
+                                     'check_availability','book_reservation',
+                                     'cancel_reservation','leave_message'
+                                   ],
+  timezone             TEXT        NOT NULL DEFAULT 'America/Chicago',
+  config               JSONB       NOT NULL,
+  active               BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_locations_account        ON locations (account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_twilio_number ON locations (twilio_number);
+
+DROP TRIGGER IF EXISTS locations_updated_at ON locations;
+CREATE TRIGGER locations_updated_at
+  BEFORE UPDATE ON locations
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Fires NOTIFY when tenant config changes so the server's locationStore cache
+-- (wired in 6.3) can invalidate without a redeploy.
+CREATE OR REPLACE FUNCTION notify_location_updated()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('location_config_updated', NEW.id);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS location_config_notify ON locations;
+CREATE TRIGGER location_config_notify
+  AFTER UPDATE OF config, twilio_number, sms_from_number, elevenlabs_agent_id,
+                  elevenlabs_voice_id, enabled_tools, timezone, active, name ON locations
+  FOR EACH ROW EXECUTE FUNCTION notify_location_updated();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- LOCATION_TABLES — restaurant tables, tenant-scoped. Composite PK means
+-- "T1" is local to a location; there is no global T1.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS location_tables (
+  location_id            TEXT NOT NULL REFERENCES locations(id),
+  id                     TEXT NOT NULL,
+  capacity               SMALLINT NOT NULL,
+  location_label         TEXT NOT NULL,
+  notes                  TEXT,
+  wheelchair_accessible  BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (location_id, id)
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Nullable tenant FKs on existing domain tables. NOT NULL flip happens in 6.4
+-- (reservations) and a follow-up deploy (messages, calls) after 6.3 backfills.
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES locations(id);
+ALTER TABLE messages     ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES locations(id);
+ALTER TABLE calls        ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES locations(id);
+
+-- External booking/ordering integration door (OpenTable / Resy / Square / Toast).
+-- reservations.table_id stays as the local cache; external_id is the pointer
+-- into whatever provider owns availability in an integrated deployment.
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS external_provider TEXT;
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS external_id       TEXT;
+CREATE INDEX IF NOT EXISTS idx_reservations_external
+  ON reservations (external_provider, external_id)
+  WHERE external_provider IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_reservations_location ON reservations (location_id);
+CREATE INDEX IF NOT EXISTS idx_messages_location     ON messages     (location_id);
+CREATE INDEX IF NOT EXISTS idx_calls_location        ON calls        (location_id);
+
+-- Seed the owning account so 6.3's location insert has a parent to FK into.
+INSERT INTO accounts (id, name)
+VALUES ('ember-group', 'Ember Group')
+ON CONFLICT (id) DO NOTHING;
 `;
 
 async function main() {
