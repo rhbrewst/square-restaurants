@@ -114,19 +114,28 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 
 ### Tables
 
+**`accounts`** — owner / billing layer (added in 6.2). One account may own many locations. Soft-delete via `active BOOLEAN`.
+
+**`locations`** — per-tenant venue (added in 6.2). Neutral name so future verticals (salons, spas) can attach parallel domain schemas without renaming FKs — the `vertical` column is the seam. Unique `twilio_number` is how inbound calls resolve a tenant. `config` is the JSONB copy of the old `restaurant.json` shape; backfilled for Ember Room in 6.3. `enabled_tools TEXT[]` is per-tenant feature flags. `timezone` replaces the single-tenant top-level field once 6.3 lands. `AFTER UPDATE` trigger emits `location_config_updated` NOTIFY so the cache invalidates without a redeploy.
+
+**`location_tables`** — restaurant tables, tenant-scoped (added in 6.2). Composite PK `(location_id, id)` means "T1" is local to a location; there is no global T1.
+
 **`reservations`** — the core booking table.
 - PK: 8-char hex `id` (DB-generated via `encode(gen_random_bytes(4), 'hex')`).
-- **Invariant:** `no_double_booking` EXCLUDE constraint using `btree_gist`. Two `confirmed` reservations on the same `table_id` whose 90-minute `tsrange` windows overlap cannot coexist. This is enforced at the DB level — the app layer's `findConflictingTableIds` is used only to *suggest* open tables before inserting.
+- **Invariant:** `no_double_booking` EXCLUDE constraint using `btree_gist`. Two `confirmed` reservations on the same `table_id` whose 90-minute `tsrange` windows overlap cannot coexist. This is enforced at the DB level — the app layer's `findConflictingTableIds` is used only to *suggest* open tables before inserting. **Swapped in 6.4** to include `location_id WITH =` as the first exclusion term.
+- `location_id TEXT REFERENCES locations(id)` (added in 6.2, nullable; flipped NOT NULL in 6.4 after the 6.3 backfill).
+- `external_provider` / `external_id` (added in 6.2, nullable) reserve a hook for future OpenTable / Resy / Square / Toast integration — `table_id` stays as the local cache.
 - Triggers: `set_updated_at` (BEFORE UPDATE), `notify_new_reservation` (AFTER INSERT → `pg_notify('new_reservation', ...)`).
 - Statuses: `confirmed | cancelled | no_show | completed`.
 
-**`messages`** — management callback queue. Plain table, `unread | read | resolved`.
+**`messages`** — management callback queue. Plain table, `unread | read | resolved`. Gained nullable `location_id` in 6.2.
 
 **`calls`** — one row per phone session. **Partitioned by month** on `started_at`. PK is composite `(id, started_at)` because Postgres requires the partition key in every unique constraint. Partitions for current + next 2 months are seeded at migration time; `ensure_next_calls_partition()` (run by `pg_cron` on the 25th) creates the next one.
 - `transcript` and `tools_called` are `jsonb` with GIN indexes.
 - `reservation_id` / `message_id` FKs link a call to its outcome.
+- Gained nullable `location_id` in 6.2. The FK to `locations` propagates to each monthly partition automatically (PG 12+ cascades FKs on partitioned parents).
 
-**`call_analytics_daily`** — materialized view aggregating `calls` by day. Refreshed nightly by `pg_cron`. `scripts/report.js` and any future `/analytics` endpoint read from this, not from `calls` directly.
+**`call_analytics_daily`** — materialized view aggregating `calls` by day. Refreshed nightly by `pg_cron`. `scripts/report.js` and any future `/analytics` endpoint read from this, not from `calls` directly. Rewritten in 6.9 to group by `location_id`.
 
 ### NOTIFY channels
 
@@ -134,6 +143,7 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 |---|---|---|
 | `new_reservation` | AFTER INSERT trigger on `reservations` | `server.js` LISTEN client → `sms.sendSmsConfirmation` |
 | `reminder_due` | `queue_upcoming_reminders()` pg_cron job (hourly) | `server.js` LISTEN client → `sms.sendSmsReminder` |
+| `location_config_updated` | AFTER UPDATE trigger on `locations` | *not yet wired — 6.3 adds the listener that invalidates `locationStore`* |
 
 The LISTEN client in `server.js` is a **dedicated** `pg.Client`, not checked out from the pool — `LISTEN` requires a long-lived connection. On error it auto-reconnects with a 5s backoff.
 
