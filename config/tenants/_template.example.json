@@ -1,0 +1,51 @@
+{
+  "_comment": "Template for a new tenant. Copy this file, rename to <location-id>.json, fill in real values, then: railway run -- node scripts/create-location.js config/tenants/<location-id>.json. Keys above the blank line below are 'header' keys that map to database columns. Everything else becomes the tenant's config JSONB payload (the old restaurant.json shape). See config/restaurant.json for the complete set of config keys the tools read.",
+
+  "id":              "the-gilded-oyster",
+  "account_id":      "gilded-hospitality",
+  "account_name":    "Gilded Hospitality LLC",
+  "twilio_number":   "+15551234567",
+  "sms_from_number": "+15551234567",
+  "timezone":        "America/New_York",
+
+  "name":        "The Gilded Oyster",
+  "tagline":     "Coastal New American",
+  "address":     "1 Example Street, New York, NY 10001",
+  "phone":       "+12125551234",
+  "email":       "reservations@gildedoyster.example",
+  "description": "A short paragraph about the restaurant that the agent will read into its system prompt.",
+
+  "hours": {
+    "monday":    { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "tuesday":   { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "wednesday": { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "thursday":  { "open": "17:00", "close": "22:00", "kitchen_close": "21:30" },
+    "friday":    { "open": "17:00", "close": "23:00", "kitchen_close": "22:30" },
+    "saturday":  { "open": "17:00", "close": "23:00", "kitchen_close": "22:30" },
+    "sunday":    { "open": "17:00", "close": "21:00", "kitchen_close": "20:30" }
+  },
+
+  "reservation_policy": {
+    "slots":                       ["17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30"],
+    "weekend_slots":               ["17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
+    "min_party_size":              1,
+    "max_party_size":              8,
+    "deposit_required_party_size": 6,
+    "deposit_amount_per_person":   25,
+    "cancellation_policy":         "Cancel more than 24 hours in advance to avoid any fee. Parties of 5+ cancelled within 24 hours may be charged $25 per person."
+  },
+
+  "menu": {
+    "starters":  [{ "name": "Example Starter", "price": 12, "description": "..." }],
+    "mains":     [{ "name": "Example Main",    "price": 28, "description": "..." }],
+    "sides":     [{ "name": "Example Side",    "price": 8,  "description": "..." }],
+    "desserts":  [{ "name": "Example Dessert", "price": 10, "description": "..." }],
+    "drinks":    [{ "name": "Example Drink",   "price": 14, "description": "..." }]
+  },
+
+  "tables": [
+    { "id": "T1", "capacity": 2, "location_label": "window",     "notes": "Street view" },
+    { "id": "T2", "capacity": 4, "location_label": "main floor", "notes": "Central" },
+    { "id": "T3", "capacity": 6, "location_label": "main floor", "notes": "For larger parties" }
+  ]
+}

@@ -101,6 +101,10 @@ scripts/
 ├── migrate.js          — idempotent DDL; run before first deploy and after any schema change
 ├── backfill-tenant.js  — seeds Ember Room into locations + location_tables; stamps existing
 │                         reservations/messages/calls with location_id. Idempotent.
+├── create-location.js  — CLI to onboard a new tenant from a git-committed JSON file
+│                         under config/tenants/. Idempotent upsert of accounts +
+│                         locations + location_tables; rejects twilio_number conflicts;
+│                         prints the Twilio Voice webhook URL to wire up.
 ├── rollback-6.2.sql    — documented reversal of Task 6.2's schema additions
 ├── rollback-6.4.sql    — documented reversal of Task 6.4's constraint swap + NOT NULL flip
 ├── rollback-6.6.sql    — documented reversal of Task 6.6's messages NOT NULL flip
@@ -108,10 +112,15 @@ scripts/
 └── report.js           — CLI analytics; hits call_analytics_daily materialized view
 
 config/
-└── restaurant.json     — hours, menu, policies, tables, FAQs. Seed source for `locations.config`
-                          during backfill; no longer require()d at runtime (removed in 6.4).
-                          Edits flow through `scripts/backfill-tenant.js` or a direct
-                          UPDATE on locations (triggering the hot-reload NOTIFY).
+├── restaurant.json     — hours, menu, policies, tables, FAQs for the original Ember Room
+│                         tenant. Seed source for `locations.config` during backfill; no
+│                         longer require()d at runtime (removed in 6.4). Edits flow through
+│                         `scripts/backfill-tenant.js` or a direct UPDATE on locations
+│                         (triggering the hot-reload NOTIFY). Deleted in 6.10 cutover.
+└── tenants/            — one JSON file per tenant, fed to `scripts/create-location.js`.
+                          Header keys (id, account_id, twilio_number, timezone, name,
+                          tables, etc.) map to columns; everything else is the config
+                          JSONB payload. Git-committed for a reviewable audit trail.
 
 data/                   — legacy JSONL/JSON artifacts from pre-Postgres era; not read at runtime.
                           Safe to delete once we're confident nothing imports them. Gitignored.
