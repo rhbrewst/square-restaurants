@@ -1,0 +1,198 @@
+{
+  "id":              "the-tide-house",
+  "account_id":      "tide-house-group",
+  "account_name":    "Tide House Group LLC",
+  "twilio_number":   "+16198533132",
+  "sms_from_number": "+16198533132",
+  "timezone":        "America/Los_Angeles",
+
+  "name":        "The Tide House",
+  "tagline":     "Coastal California seafood, sourced daily off the San Diego shoreline",
+  "address":     "1480 Harbor Walk, San Diego, CA 92101",
+  "phone":       "+16198533132",
+  "email":       "reservations@thetidehouse.example",
+  "website":     "https://thetidehouse.example",
+  "description": "The Tide House is a relaxed coastal restaurant overlooking the San Diego harbor, serving sustainable seafood, raw bar selections, and California wines. We focus on whole-fish preparations, local oysters, and produce from regional farms. Open for lunch and dinner seven days a week.",
+
+  "hours": {
+    "monday":    { "open": "11:30", "close": "21:30", "kitchen_close": "21:00" },
+    "tuesday":   { "open": "11:30", "close": "21:30", "kitchen_close": "21:00" },
+    "wednesday": { "open": "11:30", "close": "21:30", "kitchen_close": "21:00" },
+    "thursday":  { "open": "11:30", "close": "22:00", "kitchen_close": "21:30" },
+    "friday":    { "open": "11:30", "close": "22:30", "kitchen_close": "22:00" },
+    "saturday":  { "open": "10:00", "close": "22:30", "kitchen_close": "22:00" },
+    "sunday":    { "open": "10:00", "close": "21:00", "kitchen_close": "20:30" }
+  },
+
+  "holiday_hours": {
+    "note": "Closed Thanksgiving Day and Christmas Day. Christmas Eve we close at 18:00. Open New Year's Eve until midnight with a special menu."
+  },
+
+  "happy_hour": {
+    "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+    "start": "15:00",
+    "end": "17:00",
+    "note": "Happy hour runs Monday through Friday from 3 to 5 PM in the bar lounge and on the patio.",
+    "specials": [
+      "$2 oysters (rotating selection)",
+      "$8 house wine and rosé",
+      "$6 local draft beer",
+      "Half-price calamari and crab dip"
+    ]
+  },
+
+  "tables": [
+    { "id": "P1", "capacity": 2, "location_label": "patio",      "notes": "Harbor view, romantic" },
+    { "id": "P2", "capacity": 4, "location_label": "patio",      "notes": "Harbor view" },
+    { "id": "M1", "capacity": 4, "location_label": "main floor", "notes": "Near the raw bar" },
+    { "id": "M2", "capacity": 6, "location_label": "main floor", "notes": "Round, good for groups" },
+    { "id": "B1", "capacity": 2, "location_label": "bar",        "notes": "Bar seating" },
+    { "id": "B2", "capacity": 2, "location_label": "bar",        "notes": "Bar seating" }
+  ],
+
+  "reservation_policy": {
+    "slots":          ["12:00", "12:30", "13:00", "13:30", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30"],
+    "weekend_slots":  ["10:30", "11:00", "11:30", "12:00", "12:30", "13:00", "13:30", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00", "20:30", "21:00"],
+    "min_party_size":              1,
+    "max_party_size":              8,
+    "deposit_required_party_size": 6,
+    "deposit_amount_per_person":   20,
+    "cancellation_policy":         "Cancel more than 24 hours in advance to avoid any fee. Parties of 6+ cancelled within 24 hours may be charged $20 per person."
+  },
+
+  "menu": {
+    "starters": [
+      { "name": "Oysters on the Half Shell", "price": 24, "description": "Half dozen, rotating selection from local CA growers, mignonette + cocktail sauce" },
+      { "name": "Tuna Crudo",                "price": 18, "description": "Sushi-grade ahi, ponzu, avocado, crispy shallots, sesame" },
+      { "name": "Crispy Calamari",           "price": 16, "description": "Lightly fried, lemon aioli, charred lemon" },
+      { "name": "Crab Dip",                  "price": 17, "description": "Dungeness crab, gruyère, sourdough crostini" },
+      { "name": "Little Gem Salad",          "price": 14, "description": "Local greens, green goddess, sourdough croutons, parmesan" }
+    ],
+    "mains": [
+      { "name": "Whole Branzino",            "price": 38, "description": "Wood-grilled, lemon, salsa verde, charred fennel — serves one" },
+      { "name": "Pan-Seared Halibut",        "price": 42, "description": "Pacific halibut, brown butter, capers, fingerling potatoes" },
+      { "name": "Cioppino",                  "price": 36, "description": "Tomato-saffron broth, mussels, shrimp, white fish, grilled bread" },
+      { "name": "Wagyu Burger",              "price": 26, "description": "Local wagyu, gruyère, caramelized onion, brioche, fries" },
+      { "name": "Vegetable Risotto",         "price": 24, "description": "Seasonal vegetables, parmesan, herb oil" }
+    ],
+    "sides": [
+      { "name": "Truffle Fries",     "price": 10, "description": "Hand-cut, parmesan, herbs" },
+      { "name": "Grilled Asparagus", "price": 12, "description": "Local asparagus, lemon, olive oil" },
+      { "name": "Heirloom Tomatoes", "price": 11, "description": "Burrata, basil, sea salt — seasonal" }
+    ],
+    "desserts": [
+      { "name": "Key Lime Tart",  "price": 11, "description": "Graham crust, whipped cream, lime zest" },
+      { "name": "Chocolate Pot",  "price": 12, "description": "Dark chocolate, sea salt, olive oil, fleur de sel" },
+      { "name": "Sorbet Trio",    "price": 10, "description": "Three rotating fruit sorbets" }
+    ],
+    "drinks": [
+      { "name": "Tide House Spritz",   "price": 14, "description": "Aperol, prosecco, soda, orange" },
+      { "name": "Harbor Margarita",    "price": 15, "description": "Blanco tequila, lime, agave, salt rim" },
+      { "name": "Local IPA",           "price": 8,  "description": "Rotating San Diego brewery" },
+      { "name": "House Chardonnay",    "price": 13, "description": "California, by the glass" },
+      { "name": "House Pinot Noir",    "price": 14, "description": "California, by the glass" }
+    ]
+  },
+
+  "bar": {
+    "seat_count": 6,
+    "reservable": false,
+    "walk_in_only": true,
+    "full_menu_available": true,
+    "note": "Six bar seats, walk-in only, full menu available. The bar opens at 11:30 (10:00 on weekends) and stays open through close."
+  },
+
+  "seating": {
+    "indoor_only": false,
+    "outdoor_seating": true,
+    "outdoor_note": "We have a covered patio with harbor views — six tables, weather permitting. Patio seating is reservable on the same terms as indoor.",
+    "bar_seating": "Bar seating is walk-in only.",
+    "high_chairs": true,
+    "booster_seats": true,
+    "wheelchair_accessible_tables": ["M1", "M2"],
+    "special_requests_note": "Patio tables go quickly on weekends — request when booking and we'll do our best."
+  },
+
+  "parking": {
+    "street_parking": "Limited metered parking on Harbor Walk and surrounding blocks; free after 6 PM.",
+    "valet": "Valet available Thursday through Sunday from 5 PM, $15.",
+    "garage": "Public garage at 1500 Harbor Walk, two blocks south, $5 flat after 6 PM."
+  },
+
+  "accessibility": {
+    "step_free_entrance": true,
+    "accessible_restrooms": true,
+    "wheelchair_accessible_tables": ["M1", "M2"],
+    "note": "Step-free entrance from Harbor Walk, accessible restrooms, two wheelchair-friendly tables on the main floor. Patio access has a small lip — please mention if assistance is needed."
+  },
+
+  "payment": {
+    "methods_accepted": ["Visa", "Mastercard", "American Express", "Discover", "Apple Pay", "Google Pay", "cash"],
+    "auto_gratuity": {
+      "applies_to_party_size": 6,
+      "percentage": 20,
+      "note": "20% auto-gratuity is added to checks for parties of 6 or more."
+    },
+    "split_checks": "We can split checks up to 4 ways per table; larger splits at the server's discretion.",
+    "corkage": "Corkage is $25 per 750ml bottle, two-bottle limit. We waive corkage on Mondays."
+  },
+
+  "kids": {
+    "kids_menu": true,
+    "high_chairs": true,
+    "booster_seats": true,
+    "note": "We have a kids menu with smaller portions of fish, pasta, and sliders. High chairs and booster seats are available — just ask the host when you arrive."
+  },
+
+  "allergens": {
+    "note": "Please let us know about any allergies when booking and again when you arrive — we will work with you to find safe options. Common allergen flags appear on the menu but always confirm with your server.",
+    "gluten_free_options": true,
+    "vegetarian_options": true,
+    "vegan_options": true,
+    "nut_free_kitchen": false
+  },
+
+  "private_dining": {
+    "available": true,
+    "capacity": 24,
+    "note": "Our private dining room seats up to 24 with harbor-facing windows. Available for lunch and dinner. Contact reservations for menus and minimums.",
+    "minimum_spend": "$1500 lunch / $2500 dinner"
+  },
+
+  "special_occasions": {
+    "note": "We're happy to make birthdays, anniversaries, and engagements memorable — let us know when booking so we can prep a card or a candle on a dessert. We do not charge a cake fee for outside cakes (please coordinate ahead).",
+    "cake_fee": 0
+  },
+
+  "corkage": {
+    "fee": 25,
+    "limit": 2,
+    "note": "$25 per 750ml bottle, two-bottle limit, waived on Mondays. We do not allow outside spirits."
+  },
+
+  "pets": {
+    "service_animals": true,
+    "pets_on_patio": true,
+    "note": "Service animals are always welcome. Well-behaved leashed dogs are welcome on the patio. Pets are not permitted inside the dining room."
+  },
+
+  "ambiance": {
+    "note": "Casual coastal — exposed wood, blue-and-white palette, big windows facing the harbor. Music kept low enough for conversation. Smart casual dress, no jacket required."
+  },
+
+  "sourcing": {
+    "philosophy": "We work directly with San Diego fishermen and California farms wherever possible. Our oysters are from California growers (rotating); our halibut and white fish are wild-caught from the Pacific.",
+    "key_partners": [
+      { "name": "Catalina Offshore Products", "location": "San Diego, CA",  "supplies": "Local sustainable seafood" },
+      { "name": "Hollandia Dairy",            "location": "San Marcos, CA", "supplies": "Dairy and butter" },
+      { "name": "Chino Farm",                 "location": "Rancho Santa Fe, CA", "supplies": "Heirloom produce" }
+    ],
+    "note": "Our menu changes with what's coming off the boats. Servers can talk through what's local that day."
+  },
+
+  "faqs": [
+    { "q": "Do you take walk-ins?",     "a": "Yes, walk-ins are welcome at the bar (six seats, full menu) any time. Dining-room walk-ins depend on availability." },
+    { "q": "Is the patio heated?",      "a": "The patio has overhead heaters and is open year-round, weather permitting." },
+    { "q": "Do you do private events?", "a": "Yes — see private dining. We can also do full-restaurant buyouts; contact reservations for details." }
+  ]
+}
