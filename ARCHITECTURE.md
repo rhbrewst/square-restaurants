@@ -197,6 +197,8 @@ Also used:
 
 Keep `.env.example` in sync with every new variable added.
 
+**Precedence:** command-line / shell-exported env vars win; `.env` fills gaps. All `require('dotenv').config()` calls use the default (no `override: true`) so an explicit `DATABASE_URL=... node src/server.js` always beats whatever is in the `.env` file. Do not re-introduce `override: true` — we hit a silent prod/local mix-up during the Phase 6 rehearsal because of it.
+
 ---
 
 ## 7. Invariants and non-obvious rules

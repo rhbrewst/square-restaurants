@@ -4,7 +4,7 @@
  * Run with: npm run dev
  */
 
-require('dotenv').config({ override: true });
+require('dotenv').config();
 const { spawn } = require('child_process');
 const twilio = require('twilio');
 
