@@ -12,7 +12,16 @@ const { startCall }                       = require('./callLogger');
 const { sendSmsConfirmation, sendSmsReminder } = require('./sms');
 const { startScheduler, stopScheduler }   = require('./scheduler');
 const { buildSystemPrompt }               = require('./systemPrompt');
+const locationStore                       = require('./locationStore');
 const restaurant = require('../config/restaurant.json');
+
+// TwiML served when tenant resolution fails. Two variants so the prod logs
+// make it clear which branch was hit without needing to correlate with the
+// caller's phone number.
+const UNKNOWN_NUMBER_TWIML =
+  '<Response><Say voice="Polly.Joanna">We\'re sorry, this number is not currently in service.</Say><Hangup/></Response>';
+const TENANT_UNAVAILABLE_TWIML =
+  '<Response><Say voice="Polly.Joanna">We\'re sorry, we\'re having a technical difficulty. Please call back in a moment.</Say><Hangup/></Response>';
 
 // ─── Startup env check (Task 2.3) ────────────────────────────────────────────
 // Crashes in production if any required variable is missing; warns in dev.
@@ -83,17 +92,32 @@ if (process.env.PUBLIC_URL) {
 
 // ─── Twilio webhook ───────────────────────────────────────────────────────────
 
-app.post('/incoming-call', (req, res) => {
-  if (req.body.CallSid) {
-    pendingCalls.set(req.body.CallSid, {
-      callSid: req.body.CallSid,
-      from:    req.body.From || null,
-      to:      req.body.To   || null,
-    });
+app.post('/incoming-call', async (req, res) => {
+  if (!req.body.CallSid) {
+    return res.type('text/xml').send(TENANT_UNAVAILABLE_TWIML);
   }
-  const twiml   = new twilio.twiml.VoiceResponse();
-  const connect = twiml.connect();
-  connect.stream({ url: `wss://${req.headers.host}/media-stream` });
+
+  let location;
+  try {
+    location = await locationStore.loadByTwilioNumber(req.body.To);
+  } catch (err) {
+    console.error('Tenant lookup failed:', err.message);
+    return res.type('text/xml').send(TENANT_UNAVAILABLE_TWIML);
+  }
+
+  if (!location) {
+    console.warn(`Unknown inbound To: ${req.body.To} from ${req.body.From}`);
+    return res.type('text/xml').send(UNKNOWN_NUMBER_TWIML);
+  }
+
+  pendingCalls.set(req.body.CallSid, {
+    callSid: req.body.CallSid,
+    from:    req.body.From || null,
+    to:      req.body.To   || null,
+    location,
+  });
+  const twiml = new twilio.twiml.VoiceResponse();
+  twiml.connect().stream({ url: `wss://${req.headers.host}/media-stream` });
   res.type('text/xml').send(twiml.toString());
 });
 
@@ -313,8 +337,17 @@ async function startNotificationListener() {
   await notifyClient.connect();
   await notifyClient.query('LISTEN new_reservation');
   await notifyClient.query('LISTEN reminder_due');
+  await notifyClient.query('LISTEN location_config_updated');
 
   notifyClient.on('notification', async (msg) => {
+    // location_config_updated carries the bare location id as its payload,
+    // not JSON — handle it before the JSON.parse below.
+    if (msg.channel === 'location_config_updated') {
+      locationStore.invalidate(msg.payload);
+      console.log(`🔄 location_config_updated → invalidated ${msg.payload}`);
+      return;
+    }
+
     const payload = JSON.parse(msg.payload);
     try {
       if (msg.channel === 'new_reservation') {

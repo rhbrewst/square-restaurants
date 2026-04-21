@@ -59,7 +59,7 @@ State lives in Postgres (Railway-managed). SMS confirmations and day-before remi
 ### Call lifecycle (happy path)
 
 1. **Inbound PSTN call** hits Twilio; Twilio POSTs `/incoming-call` on our server.
-2. Server validates the Twilio signature (prod only), captures `CallSid/From/To` into `pendingCalls`, and returns TwiML that opens a Media Stream WebSocket to `wss://<host>/media-stream`.
+2. Server validates the Twilio signature (prod only), **resolves the tenant via `locationStore.loadByTwilioNumber(req.body.To)`** — unknown number → `UNKNOWN_NUMBER_TWIML` + hangup; lookup error → `TENANT_UNAVAILABLE_TWIML` + hangup — captures `CallSid/From/To/location` into `pendingCalls`, and returns TwiML that opens a Media Stream WebSocket to `wss://<host>/media-stream`.
 3. Twilio opens the WS → `wss.on('connection', ...)` runs. We:
    - Start a `callLogger` session (inserts an empty `calls` row, returns its id for a later UPDATE).
    - Open a second WS to ElevenLabs (`wss://api.elevenlabs.io/v1/convai/conversation`).
@@ -91,16 +91,23 @@ src/
 ├── callLogger.js       — per-call session object; inserts calls row at start, UPDATEs at end
 ├── sms.js              — sendSmsConfirmation, sendSmsReminder (Twilio REST)
 ├── scheduler.js        — node-cron jobs (reminders, partition rotation, analytics refresh)
+├── systemPrompt.js     — pure buildSystemPrompt(restaurant, now); takes a Luxon DateTime
+├── locationStore.js    — tenant lookup with 60s cache, busted by NOTIFY 'location_config_updated'
 └── conversation.js     — text-only dev harness for Phase 3 (bypasses voice layer)
 
 scripts/
 ├── migrate.js          — idempotent DDL; run before first deploy and after any schema change
+├── backfill-tenant.js  — seeds Ember Room into locations + location_tables; stamps existing
+│                         reservations/messages/calls with location_id. Idempotent.
+├── rollback-6.2.sql    — documented reversal of Task 6.2's schema additions
 ├── dev.js              — boots server + ngrok, rewires Twilio webhook to current ngrok URL
 └── report.js           — CLI analytics; hits call_analytics_daily materialized view
 
 config/
-└── restaurant.json     — hours, menu, policies, tables, FAQs. Currently read synchronously
-                          at require() time; Task 6.2 migrates this to a hot-reloaded DB row.
+└── restaurant.json     — hours, menu, policies, tables, FAQs. Still the source of truth for
+                          Ember; `scripts/backfill-tenant.js` copies it into `locations.config`
+                          on every run. Task 6.4 will delete the runtime `require`s so edits
+                          flow through the DB + hot-reload path instead.
 
 data/                   — legacy JSONL/JSON artifacts from pre-Postgres era; not read at runtime.
                           Safe to delete once we're confident nothing imports them. Gitignored.
@@ -143,7 +150,7 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 |---|---|---|
 | `new_reservation` | AFTER INSERT trigger on `reservations` | `server.js` LISTEN client → `sms.sendSmsConfirmation` |
 | `reminder_due` | `queue_upcoming_reminders()` pg_cron job (hourly) | `server.js` LISTEN client → `sms.sendSmsReminder` |
-| `location_config_updated` | AFTER UPDATE trigger on `locations` | *not yet wired — 6.3 adds the listener that invalidates `locationStore`* |
+| `location_config_updated` | AFTER UPDATE trigger on `locations` | `server.js` LISTEN client → `locationStore.invalidate(msg.payload)` |
 
 The LISTEN client in `server.js` is a **dedicated** `pg.Client`, not checked out from the pool — `LISTEN` requires a long-lived connection. On error it auto-reconnects with a 5s backoff.
 
@@ -210,6 +217,7 @@ These are the things most likely to bite future edits. If you change any of them
 12. **Do not commit `data/`.** It's gitignored legacy from the JSON-file era. Production reads nothing from it.
 13. **Scheduled jobs run in the Node process, not Postgres.** If the service has zero replicas or is mid-restart at the scheduled time, that tick is skipped — the jobs are idempotent, so a missed run is not fatal, but if you scale to >1 replica you will get duplicate ticks unless you add leader election.
 14. **Tenant-local "now" is derived from `restaurant.timezone`, not the server clock.** `buildSystemPrompt` (`src/systemPrompt.js`), `check_availability`, `cancel_reservation`'s `hoursUntil` calc, and SMS date formatting all compute "now" via Luxon `DateTime.now().setZone(restaurant.timezone)`. The server runs in UTC on Railway; using `new Date()` here silently shifts day-of-week and past/future decisions by the UTC offset. When multi-tenant lands (Phase 6), this source becomes `location.timezone`.
+15. **Tenant resolution is by inbound Twilio `To` number** via `locationStore.loadByTwilioNumber`. Unknown numbers get `UNKNOWN_NUMBER_TWIML` and a hangup; lookup errors (DB unreachable, etc.) get `TENANT_UNAVAILABLE_TWIML` — **never a silent fallback to a default tenant**. The cache TTL is 60s; config changes in the DB propagate sooner via `LISTEN location_config_updated` → `locationStore.invalidate`.
 
 ---
 
