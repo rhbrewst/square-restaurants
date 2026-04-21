@@ -1,26 +1,27 @@
 /**
  * tools.js
- * Claude tool definitions + async handler functions.
+ * Tool definitions (shared schema; tenant-agnostic) + async handlers.
  *
- * DEFINITIONS — passed to the Anthropic API as the `tools` array.
- * HANDLERS    — called when Claude returns a tool_use block.
+ * Every handler takes the resolved `location` as its last argument. Tenant
+ * identity is communicated to the model via the system prompt at conversation
+ * init — tool descriptions are intentionally generic so the same schema works
+ * for every tenant.
  */
 
 const { DateTime } = require('luxon');
-const restaurant   = require('../config/restaurant.json');
 const store        = require('./reservationStore');
 const messageStore = require('./messageStore');
 const pool         = require('./db');
 
 // ─────────────────────────────────────────
-// Tool Definitions (Claude API schema)
+// Tool Definitions (shared across tenants)
 // ─────────────────────────────────────────
 
 const TOOL_DEFINITIONS = [
   {
     name: 'get_restaurant_info',
     description:
-      'Returns detailed information about The Ember Room for a given topic. ' +
+      'Returns detailed information about the restaurant for a given topic. ' +
       'Use this when the caller asks about parking, accessibility, seating, bar, ' +
       'payment, kids facilities, allergens, private dining, special occasions, ' +
       'corkage, pets, ambiance, happy hour, holiday hours, or local sourcing. ' +
@@ -44,7 +45,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'get_menu',
     description:
-      'Returns menu items from The Ember Room. Can return the full menu or a specific section. ' +
+      'Returns menu items. Can return the full menu or a specific section. ' +
       'Use this when the caller asks about food, drinks, prices, or dietary options.',
     input_schema: {
       type: 'object',
@@ -61,7 +62,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'check_availability',
     description:
-      'Checks whether The Ember Room has a table available for a given date, time, and party size. ' +
+      'Checks whether a table is available for a given date, time, and party size. ' +
       'Returns available time slots if the requested slot is taken. ' +
       'Date must be in YYYY-MM-DD format. Time must be in HH:MM (24-hour) format.',
     input_schema: {
@@ -77,7 +78,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'book_reservation',
     description:
-      'Books a table at The Ember Room after availability has been confirmed. ' +
+      'Books a table after availability has been confirmed. ' +
       'Always call check_availability first. Returns a confirmation code.',
     input_schema: {
       type: 'object',
@@ -112,7 +113,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'leave_message',
     description:
-      'Records a message for the restaurant management team to follow up on. ' +
+      'Records a message for the management team to follow up on. ' +
       'Use this instead of directing callers to ring back when they: have feedback about a prior visit, ' +
       'have a lost and found inquiry, want to discuss a private event, have a complaint or compliment, ' +
       'have a question you cannot answer, or request a callback for any reason. ' +
@@ -134,24 +135,25 @@ const TOOL_DEFINITIONS = [
 // Tool Handlers
 // ─────────────────────────────────────────
 
-function get_restaurant_info({ topic }) {
+function get_restaurant_info({ topic }, location) {
+  const cfg = location.config;
   const topicMap = {
-    parking:           restaurant.parking,
-    accessibility:     restaurant.accessibility,
-    seating:           restaurant.seating,
-    bar:               restaurant.bar,
-    payment:           restaurant.payment,
-    kids:              restaurant.kids,
-    allergens:         restaurant.allergens,
-    private_dining:    restaurant.private_dining,
-    special_occasions: restaurant.special_occasions,
-    corkage:           restaurant.corkage,
-    pets:              restaurant.pets,
-    ambiance:          restaurant.ambiance,
-    happy_hour:        restaurant.happy_hour,
-    holiday_hours:     restaurant.holiday_hours,
-    sourcing:          restaurant.sourcing,
-    faqs:              restaurant.faqs,
+    parking:           cfg.parking,
+    accessibility:     cfg.accessibility,
+    seating:           cfg.seating,
+    bar:               cfg.bar,
+    payment:           cfg.payment,
+    kids:              cfg.kids,
+    allergens:         cfg.allergens,
+    private_dining:    cfg.private_dining,
+    special_occasions: cfg.special_occasions,
+    corkage:           cfg.corkage,
+    pets:              cfg.pets,
+    ambiance:          cfg.ambiance,
+    happy_hour:        cfg.happy_hour,
+    holiday_hours:     cfg.holiday_hours,
+    sourcing:          cfg.sourcing,
+    faqs:              cfg.faqs,
   };
   const data = topicMap[topic];
   if (!data) {
@@ -160,8 +162,8 @@ function get_restaurant_info({ topic }) {
   return { topic, data };
 }
 
-function get_menu({ section }) {
-  const { menu } = restaurant;
+function get_menu({ section }, location) {
+  const { menu } = location.config;
   if (section === 'all') return { menu };
   if (!menu[section]) {
     return { error: `Unknown section "${section}". Valid sections: starters, mains, sides, desserts, drinks, all.` };
@@ -169,7 +171,7 @@ function get_menu({ section }) {
   return { section, items: menu[section] };
 }
 
-async function check_availability({ date, time, party_size }) {
+async function check_availability({ date, time, party_size }, location) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return { available: false, reason: 'Date must be in YYYY-MM-DD format.' };
   }
@@ -179,9 +181,9 @@ async function check_availability({ date, time, party_size }) {
 
   const requested = DateTime.fromFormat(
     `${date} ${time}`, 'yyyy-MM-dd HH:mm',
-    { zone: restaurant.timezone },
+    { zone: location.timezone },
   );
-  const now = DateTime.now().setZone(restaurant.timezone);
+  const now = DateTime.now().setZone(location.timezone);
 
   if (!requested.isValid) {
     return { available: false, reason: 'Invalid date or time.' };
@@ -191,7 +193,7 @@ async function check_availability({ date, time, party_size }) {
   }
 
   const dayName = requested.toFormat('cccc').toLowerCase();
-  const hours   = restaurant.hours[dayName];
+  const hours   = location.config.hours[dayName];
 
   if (!hours) {
     return { available: false, reason: `We are closed on ${dayName}s.` };
@@ -209,10 +211,9 @@ async function check_availability({ date, time, party_size }) {
     };
   }
 
+  const pol        = location.config.reservation_policy;
   const isWeekend  = ['saturday', 'sunday'].includes(dayName);
-  const validSlots = isWeekend
-    ? restaurant.reservation_policy.weekend_slots
-    : restaurant.reservation_policy.slots;
+  const validSlots = isWeekend ? pol.weekend_slots : pol.slots;
 
   if (!validSlots.includes(time)) {
     return {
@@ -221,7 +222,7 @@ async function check_availability({ date, time, party_size }) {
     };
   }
 
-  const { max_party_size, min_party_size } = restaurant.reservation_policy;
+  const { max_party_size, min_party_size } = pol;
   if (party_size < min_party_size || party_size > max_party_size) {
     return {
       available: false,
@@ -229,18 +230,21 @@ async function check_availability({ date, time, party_size }) {
     };
   }
 
-  const suitableTables = restaurant.tables
+  // location.tables is hydrated by locationStore from location_tables rows.
+  // `location_label` is the seating-area name (e.g. "window", "main floor");
+  // `id` is the tenant-local table id (e.g. "T1").
+  const suitableTables = location.tables
     .filter((t) => t.capacity >= party_size)
     .sort((a, b) => a.capacity - b.capacity);
 
-  const conflictingIds = await store.findConflictingTableIds(date, time);
+  const conflictingIds = await store.findConflictingTableIds(date, time, location.id);
   const freeTable = suitableTables.find((t) => !conflictingIds.includes(t.id));
 
   if (!freeTable) {
     const alternatives = [];
     for (const slot of validSlots) {
       if (slot === time) continue;
-      const slotConflicts = await store.findConflictingTableIds(date, slot);
+      const slotConflicts = await store.findConflictingTableIds(date, slot, location.id);
       if (suitableTables.some((t) => !slotConflicts.includes(t.id))) {
         alternatives.push(slot);
         if (alternatives.length >= 3) break;
@@ -255,8 +259,7 @@ async function check_availability({ date, time, party_size }) {
     };
   }
 
-  const policy          = restaurant.reservation_policy;
-  const depositRequired = party_size >= policy.deposit_required_party_size;
+  const depositRequired = party_size >= pol.deposit_required_party_size;
 
   return {
     available:      true,
@@ -264,24 +267,24 @@ async function check_availability({ date, time, party_size }) {
     time,
     party_size,
     table_id:       freeTable.id,
-    table_location: freeTable.location,
+    table_location: freeTable.location_label,
     table_capacity: freeTable.capacity,
     deposit_required: depositRequired,
     deposit_info: depositRequired
-      ? `A $${policy.deposit_amount_per_person * party_size} deposit ($${policy.deposit_amount_per_person}/person) is required for parties of ${policy.deposit_required_party_size}+. Our team will follow up to collect it.`
+      ? `A $${pol.deposit_amount_per_person * party_size} deposit ($${pol.deposit_amount_per_person}/person) is required for parties of ${pol.deposit_required_party_size}+. Our team will follow up to collect it.`
       : null,
-    cancellation_policy: policy.cancellation_policy,
+    cancellation_policy: pol.cancellation_policy,
   };
 }
 
-async function book_reservation({ date, time, party_size, customer_name, customer_phone, special_requests }) {
+async function book_reservation({ date, time, party_size, customer_name, customer_phone, special_requests }, location) {
   // Basic phone validation (Task 3.4)
   const cleaned = customer_phone.replace(/\D/g, '');
   if (cleaned.length < 10 || cleaned.length > 15) {
     return { success: false, reason: 'Please provide a valid phone number so we can confirm your reservation.' };
   }
 
-  const avail = await check_availability({ date, time, party_size });
+  const avail = await check_availability({ date, time, party_size }, location);
   if (!avail.available) {
     return { success: false, reason: avail.reason, alternatives: avail.alternatives };
   }
@@ -290,11 +293,12 @@ async function book_reservation({ date, time, party_size, customer_name, custome
     const reservation = await store.addReservation({
       date, time, party_size, customer_name, customer_phone,
       special_requests, table_id: avail.table_id, table_location: avail.table_location,
+      location_id: location.id,
     });
     return {
       success:             true,
       confirmation_code:   reservation.id,
-      restaurant:          restaurant.name,
+      restaurant:          location.name,
       date,
       time,
       party_size,
@@ -302,8 +306,8 @@ async function book_reservation({ date, time, party_size, customer_name, custome
       customer_name,
       deposit_required:    avail.deposit_required,
       deposit_info:        avail.deposit_info,
-      cancellation_policy: restaurant.reservation_policy.cancellation_policy,
-      message: `Your reservation is confirmed! Confirmation code: ${reservation.id}. We look forward to seeing you at ${restaurant.name}.`,
+      cancellation_policy: location.config.reservation_policy.cancellation_policy,
+      message: `Your reservation is confirmed! Confirmation code: ${reservation.id}. We look forward to seeing you at ${location.name}.`,
     };
   } catch (err) {
     if (err.code === '23P01') {
@@ -313,10 +317,13 @@ async function book_reservation({ date, time, party_size, customer_name, custome
   }
 }
 
-async function cancel_reservation({ confirmation_code, customer_phone, reason }) {
+async function cancel_reservation({ confirmation_code, customer_phone, reason }, location) {
   const result = await pool.query(
-    `SELECT * FROM reservations WHERE id = LOWER($1) AND status = 'confirmed'`,
-    [confirmation_code],
+    `SELECT * FROM reservations
+      WHERE id = LOWER($1)
+        AND location_id = $2
+        AND status = 'confirmed'`,
+    [confirmation_code, location.id],
   );
 
   if (!result.rows.length) {
@@ -334,7 +341,7 @@ async function cancel_reservation({ confirmation_code, customer_phone, reason })
   const resTime = DateTime.fromFormat(
     `${String(res.date).slice(0, 10)} ${String(res.time).slice(0, 5)}`,
     'yyyy-MM-dd HH:mm',
-    { zone: restaurant.timezone },
+    { zone: location.timezone },
   );
   const hoursUntil = resTime.diffNow('hours').hours;
   const lateFee    = hoursUntil < 24 && res.party_size >= 5;
@@ -357,8 +364,11 @@ async function cancel_reservation({ confirmation_code, customer_phone, reason })
   };
 }
 
-async function leave_message({ caller_name, caller_phone, subject, message }) {
-  const record = await messageStore.addMessage({ caller_name, caller_phone, subject, message });
+async function leave_message({ caller_name, caller_phone, subject, message }, location) {
+  const record = await messageStore.addMessage({
+    caller_name, caller_phone, subject, message,
+    location_id: location.id,
+  });
   return {
     success:      true,
     message_id:   record.id,
@@ -370,14 +380,21 @@ async function leave_message({ caller_name, caller_phone, subject, message }) {
 // Dispatch
 // ─────────────────────────────────────────
 
-async function handleToolCall(toolName, toolInput) {
+async function handleToolCall(toolName, toolInput, location) {
+  if (!location) {
+    return { error: 'Internal error: tenant not resolved.' };
+  }
+  if (Array.isArray(location.enabled_tools) && !location.enabled_tools.includes(toolName)) {
+    return { error: 'This tool is not enabled for this location.' };
+  }
+
   switch (toolName) {
-    case 'get_restaurant_info': return get_restaurant_info(toolInput);
-    case 'get_menu':            return get_menu(toolInput);
-    case 'check_availability':  return check_availability(toolInput);
-    case 'book_reservation':    return book_reservation(toolInput);
-    case 'cancel_reservation':  return cancel_reservation(toolInput);
-    case 'leave_message':       return leave_message(toolInput);
+    case 'get_restaurant_info': return get_restaurant_info(toolInput, location);
+    case 'get_menu':            return get_menu(toolInput, location);
+    case 'check_availability':  return check_availability(toolInput, location);
+    case 'book_reservation':    return book_reservation(toolInput, location);
+    case 'cancel_reservation':  return cancel_reservation(toolInput, location);
+    case 'leave_message':       return leave_message(toolInput, location);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }

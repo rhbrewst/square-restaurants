@@ -15,6 +15,7 @@ function startCall() {
     stream_sid:                  null,
     caller_number:               null,
     called_number:               null,
+    location_id:                 null,
     elevenlabs_conversation_id:  null,
     outcome:                     'no_action',
     transcript:                  [],
@@ -41,11 +42,12 @@ function startCall() {
   });
 
   return {
-    setCallInfo({ callSid, streamSid, from, to }) {
-      session.call_sid      = callSid   || null;
-      session.stream_sid    = streamSid || null;
-      session.caller_number = from      || null;
-      session.called_number = to        || null;
+    setCallInfo({ callSid, streamSid, from, to, locationId }) {
+      session.call_sid      = callSid    || null;
+      session.stream_sid    = streamSid  || null;
+      session.caller_number = from       || null;
+      session.called_number = to         || null;
+      session.location_id   = locationId || null;
     },
 
     setConversationId(conversationId) {
@@ -118,24 +120,26 @@ function startCall() {
              stream_sid                 = $2,
              caller_number              = $3,
              called_number              = $4,
-             elevenlabs_conversation_id = $5,
-             ended_at                   = $6,
-             duration_seconds           = $7,
-             outcome                    = $8,
-             cost_estimate_usd          = $9,
-             cost_breakdown_usd         = $10,
-             transcript                 = $11,
-             tools_called               = $12,
-             inquiry_topics             = $13,
-             reservation_id             = $14,
-             message_id                 = $15,
-             errors                     = $16
-           WHERE id = $17 AND started_at = $18`,
+             location_id                = $5,
+             elevenlabs_conversation_id = $6,
+             ended_at                   = $7,
+             duration_seconds           = $8,
+             outcome                    = $9,
+             cost_estimate_usd          = $10,
+             cost_breakdown_usd         = $11,
+             transcript                 = $12,
+             tools_called               = $13,
+             inquiry_topics             = $14,
+             reservation_id             = $15,
+             message_id                 = $16,
+             errors                     = $17
+           WHERE id = $18 AND started_at = $19`,
           [
             session.call_sid,
             session.stream_sid,
             session.caller_number,
             session.called_number,
+            session.location_id,
             session.elevenlabs_conversation_id,
             endedAt,
             durationSeconds,

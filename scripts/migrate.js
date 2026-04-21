@@ -99,6 +99,7 @@ BEGIN
     'new_reservation',
     json_build_object(
       'id',              NEW.id,
+      'location_id',     NEW.location_id,
       'customer_name',   NEW.customer_name,
       'customer_phone',  NEW.customer_phone,
       'date',            NEW.date,
@@ -238,6 +239,7 @@ BEGIN
       'reminder_due',
       json_build_object(
         'id',             r.id,
+        'location_id',    r.location_id,
         'customer_name',  r.customer_name,
         'customer_phone', r.customer_phone,
         'date',           r.date,
@@ -383,6 +385,44 @@ CREATE INDEX IF NOT EXISTS idx_calls_location        ON calls        (location_i
 INSERT INTO accounts (id, name)
 VALUES ('ember-group', 'Ember Group')
 ON CONFLICT (id) DO NOTHING;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Phase 6.4 — Tenant-aware exclusion constraint + NOT NULL flip (reservations)
+--
+-- Preconditions enforced below: every reservations row must have a
+-- non-null location_id. scripts/backfill-tenant.js is what populates those, so
+-- run it BEFORE applying this migration. The check aborts the whole migration
+-- (single query = single implicit savepoint) if any NULLs remain.
+--
+-- The NOT NULL flip on messages.location_id and calls.location_id is NOT done
+-- here — it waits for a follow-up deploy 24h after the new code has baked, so
+-- any row the old code raced in gets caught by a second backfill run.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+DO $$
+DECLARE null_count INT;
+BEGIN
+  SELECT COUNT(*) INTO null_count FROM reservations WHERE location_id IS NULL;
+  IF null_count > 0 THEN
+    RAISE EXCEPTION 'Phase 6.4 migration aborted: % reservations.location_id rows are NULL. Run scripts/backfill-tenant.js first.', null_count;
+  END IF;
+END $$;
+
+ALTER TABLE reservations ALTER COLUMN location_id SET NOT NULL;
+
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS no_double_booking;
+ALTER TABLE reservations ADD CONSTRAINT no_double_booking
+  EXCLUDE USING gist (
+    location_id WITH =,
+    table_id    WITH =,
+    reservation_tsrange(date, time) WITH &&
+  ) WHERE (status = 'confirmed');
+
+-- Tenant-scoped range scans on date all want this leading (location_id, date)
+-- shape. The old (date-only) index becomes dead weight.
+DROP INDEX IF EXISTS idx_reservations_date;
+CREATE INDEX IF NOT EXISTS idx_reservations_location_date
+  ON reservations (location_id, date);
 `;
 
 async function main() {
