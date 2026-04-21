@@ -5,6 +5,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const { Client } = require('pg');
 const twilio     = require('twilio');
 const rateLimit  = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const { DateTime } = require('luxon');
 const pool       = require('./db');
 const { handleToolCall }                  = require('./tools');
@@ -63,15 +64,16 @@ app.use(express.json());
 // Cap webhook hits to guard against accidental or malicious flooding.
 
 // Key by the inbound Twilio `To` number so noisy traffic against one tenant
-// can't starve the budget for another. Falls back to req.ip when `To` isn't
-// present (non-Twilio hits, malformed webhook).
+// can't starve the budget for another. Falls back to ipKeyGenerator(req) when
+// `To` isn't present — that helper normalizes IPv6 to a /64 subnet so a
+// single attacker can't bypass the limit by picking random IPv6 addresses.
 const callLimiter = rateLimit({
   windowMs:        60_000,
   max:             20,
   standardHeaders: true,
   legacyHeaders:   false,
   message:         'Too many requests',
-  keyGenerator:    (req) => req.body?.To || req.ip,
+  keyGenerator:    (req) => req.body?.To || ipKeyGenerator(req),
 });
 
 app.use('/incoming-call', callLimiter);
