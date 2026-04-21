@@ -4,7 +4,7 @@
  * Run with:  node src/conversation.js
  */
 
-require('dotenv').config({ override: true });
+require('dotenv').config();
 const readline  = require('readline');
 const Anthropic = require('@anthropic-ai/sdk');
 
