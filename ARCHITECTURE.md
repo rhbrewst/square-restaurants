@@ -89,7 +89,9 @@ src/
 ├── reservationStore.js — findConflictingTableIds, addReservation, toMinutes
 ├── messageStore.js     — addMessage
 ├── callLogger.js       — per-call session object; inserts calls row at start, UPDATEs at end
-├── sms.js              — sendSmsConfirmation, sendSmsReminder (Twilio REST)
+├── sms.js              — sendSmsConfirmation, sendSmsReminder (Twilio REST);
+│                         per-tenant since 6.6 — resolves location via
+│                         locationStore.loadById(payload.location_id)
 ├── scheduler.js        — node-cron jobs (reminders, partition rotation, analytics refresh)
 ├── systemPrompt.js     — pure buildSystemPrompt(location, now); filters tools by enabled_tools
 ├── locationStore.js    — tenant lookup with 60s cache, busted by NOTIFY 'location_config_updated'
@@ -101,6 +103,7 @@ scripts/
 │                         reservations/messages/calls with location_id. Idempotent.
 ├── rollback-6.2.sql    — documented reversal of Task 6.2's schema additions
 ├── rollback-6.4.sql    — documented reversal of Task 6.4's constraint swap + NOT NULL flip
+├── rollback-6.6.sql    — documented reversal of Task 6.6's messages NOT NULL flip
 ├── dev.js              — boots server + ngrok, rewires Twilio webhook to current ngrok URL
 └── report.js           — CLI analytics; hits call_analytics_daily materialized view
 
@@ -137,12 +140,12 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 - Triggers: `set_updated_at` (BEFORE UPDATE), `notify_new_reservation` (AFTER INSERT → `pg_notify('new_reservation', ...)`, payload includes `location_id` since 6.4).
 - Statuses: `confirmed | cancelled | no_show | completed`.
 
-**`messages`** — management callback queue. Plain table, `unread | read | resolved`. `location_id` is still nullable; NOT NULL flip is a follow-up deploy after 6.4 has baked.
+**`messages`** — management callback queue. Plain table, `unread | read | resolved`. `location_id` is NOT NULL (flipped in 6.6).
 
 **`calls`** — one row per phone session. **Partitioned by month** on `started_at`. PK is composite `(id, started_at)` because Postgres requires the partition key in every unique constraint. Partitions for current + next 2 months are seeded at migration time; `ensure_next_calls_partition()` (run by `pg_cron` on the 25th) creates the next one.
 - `transcript` and `tools_called` are `jsonb` with GIN indexes.
 - `reservation_id` / `message_id` FKs link a call to its outcome.
-- Gained `location_id` in 6.2 (nullable; NOT NULL flip is a follow-up deploy). The FK to `locations` propagates to each monthly partition automatically (PG 12+ cascades FKs on partitioned parents).
+- `location_id` is **intentionally nullable** — `callLogger.startCall()` does a skeleton INSERT at WS-connection time, before the Twilio `start` event has resolved the tenant, so the initial row has no `location_id`. The `endCall()` UPDATE backfills it. Flipping NOT NULL here would break every call; revisit only if `startCall` is restructured to defer the INSERT. The FK to `locations` propagates to each monthly partition automatically (PG 12+ cascades FKs on partitioned parents).
 
 **`call_analytics_daily`** — materialized view aggregating `calls` by day. Refreshed nightly by `pg_cron`. `scripts/report.js` and any future `/analytics` endpoint read from this, not from `calls` directly. Rewritten in 6.9 to group by `location_id`.
 
@@ -193,7 +196,7 @@ Required at startup (`src/server.js` crashes in prod if any are missing, warns i
 - `DATABASE_URL`, `PUBLIC_URL`
 
 Also used:
-- `RESTAURANT_PHONE` — footer in SMS messages
+- `RESTAURANT_PHONE` — **deprecated as of 6.6**; no longer read (SMS footer now comes from `location.config.phone`). Keep in `.env.example` until 6.10 cutover, then delete.
 - `NODE_ENV` — toggles Postgres SSL and the prod-vs-dev missing-env behaviour
 - `PORT` — injected by Railway; defaults to 3000 locally
 
@@ -224,7 +227,7 @@ These are the things most likely to bite future edits. If you change any of them
 15. **Tenant resolution is by inbound Twilio `To` number** via `locationStore.loadByTwilioNumber`. Unknown numbers get `UNKNOWN_NUMBER_TWIML` and a hangup; lookup errors (DB unreachable, etc.) get `TENANT_UNAVAILABLE_TWIML` — **never a silent fallback to a default tenant**. The cache TTL is 60s; config changes in the DB propagate sooner via `LISTEN location_config_updated` → `locationStore.invalidate`.
 16. **Every domain read/write must scope by `location_id`.** `reservations.no_double_booking` enforces this at the DB for bookings. `check_availability`, `cancel_reservation`, `addReservation`, `addMessage`, and `callLogger.setCallInfo` all pass `location.id` explicitly. Forgetting to scope a new query leaks data across tenants.
 17. **`conversation_initiation_client_data` must wait for both the ElevenLabs WS `open` event and the Twilio `start` event.** The tenant isn't known until `start` resolves the `CallSid` → `pendingCalls` → `location`; the EL WS opens strictly before that. `wss.on('connection', ...)` uses a `startP` promise to gate the init send.
-18. **NOT NULL on `messages.location_id` and `calls.location_id` is deferred to a follow-up deploy** ~24h after 6.4 ships. New code always writes `location_id`; once we've proven no row leaks through with NULL, a second migration flips the NOT NULL. Until then the columns stay permissive.
+18. **`messages.location_id` is NOT NULL (6.6); `calls.location_id` stays nullable on purpose.** `addMessage` is only called from the `leave_message` tool, which always has a resolved location, so NOT NULL locks an invariant that was already true. `calls` is different: `callLogger.startCall` INSERTs a skeleton row at WS-connection time before Twilio's `start` event has resolved the tenant, so the initial `location_id` is always NULL and is backfilled by `endCall`'s UPDATE. Flipping NOT NULL on `calls.location_id` would break every call and is NOT a pending follow-up — it would require restructuring `startCall` to defer the INSERT.
 
 ---
 

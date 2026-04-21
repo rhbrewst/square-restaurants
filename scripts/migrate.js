@@ -423,6 +423,31 @@ ALTER TABLE reservations ADD CONSTRAINT no_double_booking
 DROP INDEX IF EXISTS idx_reservations_date;
 CREATE INDEX IF NOT EXISTS idx_reservations_location_date
   ON reservations (location_id, date);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Phase 6.6 — NOT NULL flip on messages.location_id
+--
+-- messages is structurally safe: addMessage is only called from the
+-- leave_message tool, which always has a resolved location. Flipping NOT NULL
+-- here locks that invariant at the DB.
+--
+-- calls.location_id stays NULLABLE on purpose — callLogger.startCall() does
+-- a skeleton INSERT at WS-connection time, before the Twilio start event
+-- has resolved the tenant, so the INSERT intentionally has no location_id.
+-- The endCall() UPDATE writes it. NOT NULL here would break every call.
+-- Revisit only if startCall is restructured to defer the INSERT.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+DO $$
+DECLARE msg_nulls INT;
+BEGIN
+  SELECT COUNT(*) INTO msg_nulls FROM messages WHERE location_id IS NULL;
+  IF msg_nulls > 0 THEN
+    RAISE EXCEPTION 'Phase 6.6 migration aborted: % messages.location_id rows are NULL. Run scripts/backfill-tenant.js first.', msg_nulls;
+  END IF;
+END $$;
+
+ALTER TABLE messages ALTER COLUMN location_id SET NOT NULL;
 `;
 
 async function main() {
