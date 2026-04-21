@@ -63,9 +63,9 @@ State lives in Postgres (Railway-managed). SMS confirmations and day-before remi
 3. Twilio opens the WS → `wss.on('connection', ...)` runs. We:
    - Start a `callLogger` session (inserts an empty `calls` row, returns its id for a later UPDATE).
    - Open a second WS to ElevenLabs (`wss://api.elevenlabs.io/v1/convai/conversation`).
-   - Send `conversation_initiation_client_data` with a dynamically-built system prompt and first message.
+   - Wait for **both** the EL WS `open` event and Twilio's `start` event (which carries the `CallSid` → `pendingCalls` → `location`). Once both fire, send `conversation_initiation_client_data` with a system prompt built from the tenant's config and a tenant-specific first message.
 4. **Audio bridge:** Twilio `media` frames are forwarded to ElevenLabs as `user_audio_chunk`; ElevenLabs `audio` events are forwarded back to Twilio as `media`.
-5. **Tool calls:** ElevenLabs emits `client_tool_call` messages; server runs `handleToolCall` and returns `client_tool_result`. Tool handlers read/write Postgres directly.
+5. **Tool calls:** ElevenLabs emits `client_tool_call` messages; server runs `handleToolCall(name, input, location)` and returns `client_tool_result`. Tool handlers read/write Postgres directly, scoped by `location.id`. Disabled tools (not in `location.enabled_tools`) are rejected at dispatch as defense-in-depth — the primary gate is that the system prompt only describes enabled tools.
 6. **End of call:** Twilio sends `stop` (or either WS closes) → `logger.endCall()` UPDATEs the `calls` row with transcript, tools called, duration, outcome, and cost estimate.
 7. **Post-booking SMS:** `INSERT` on `reservations` fires the `reservation_notify` trigger → `pg_notify('new_reservation', ...)` → the server's dedicated LISTEN client receives it → `sms.sendSmsConfirmation` sends the SMS.
 8. **Reminders:** `src/scheduler.js` (node-cron) calls `queue_upcoming_reminders()` hourly. Reservations due in 23–25h are flipped to `reminder_sent = TRUE` and `pg_notify('reminder_due', ...)` is emitted → server sends SMS.
@@ -91,23 +91,24 @@ src/
 ├── callLogger.js       — per-call session object; inserts calls row at start, UPDATEs at end
 ├── sms.js              — sendSmsConfirmation, sendSmsReminder (Twilio REST)
 ├── scheduler.js        — node-cron jobs (reminders, partition rotation, analytics refresh)
-├── systemPrompt.js     — pure buildSystemPrompt(restaurant, now); takes a Luxon DateTime
+├── systemPrompt.js     — pure buildSystemPrompt(location, now); filters tools by enabled_tools
 ├── locationStore.js    — tenant lookup with 60s cache, busted by NOTIFY 'location_config_updated'
-└── conversation.js     — text-only dev harness for Phase 3 (bypasses voice layer)
+└── conversation.js     — text-only dev harness; fetches ember-room from DB at startup
 
 scripts/
 ├── migrate.js          — idempotent DDL; run before first deploy and after any schema change
 ├── backfill-tenant.js  — seeds Ember Room into locations + location_tables; stamps existing
 │                         reservations/messages/calls with location_id. Idempotent.
 ├── rollback-6.2.sql    — documented reversal of Task 6.2's schema additions
+├── rollback-6.4.sql    — documented reversal of Task 6.4's constraint swap + NOT NULL flip
 ├── dev.js              — boots server + ngrok, rewires Twilio webhook to current ngrok URL
 └── report.js           — CLI analytics; hits call_analytics_daily materialized view
 
 config/
-└── restaurant.json     — hours, menu, policies, tables, FAQs. Still the source of truth for
-                          Ember; `scripts/backfill-tenant.js` copies it into `locations.config`
-                          on every run. Task 6.4 will delete the runtime `require`s so edits
-                          flow through the DB + hot-reload path instead.
+└── restaurant.json     — hours, menu, policies, tables, FAQs. Seed source for `locations.config`
+                          during backfill; no longer require()d at runtime (removed in 6.4).
+                          Edits flow through `scripts/backfill-tenant.js` or a direct
+                          UPDATE on locations (triggering the hot-reload NOTIFY).
 
 data/                   — legacy JSONL/JSON artifacts from pre-Postgres era; not read at runtime.
                           Safe to delete once we're confident nothing imports them. Gitignored.
@@ -129,18 +130,19 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 
 **`reservations`** — the core booking table.
 - PK: 8-char hex `id` (DB-generated via `encode(gen_random_bytes(4), 'hex')`).
-- **Invariant:** `no_double_booking` EXCLUDE constraint using `btree_gist`. Two `confirmed` reservations on the same `table_id` whose 90-minute `tsrange` windows overlap cannot coexist. This is enforced at the DB level — the app layer's `findConflictingTableIds` is used only to *suggest* open tables before inserting. **Swapped in 6.4** to include `location_id WITH =` as the first exclusion term.
-- `location_id TEXT REFERENCES locations(id)` (added in 6.2, nullable; flipped NOT NULL in 6.4 after the 6.3 backfill).
-- `external_provider` / `external_id` (added in 6.2, nullable) reserve a hook for future OpenTable / Resy / Square / Toast integration — `table_id` stays as the local cache.
-- Triggers: `set_updated_at` (BEFORE UPDATE), `notify_new_reservation` (AFTER INSERT → `pg_notify('new_reservation', ...)`).
+- **Invariant:** `no_double_booking` EXCLUDE constraint using `btree_gist`, **tenant-scoped since 6.4**: `(location_id WITH =, table_id WITH =, reservation_tsrange(date, time) WITH &&)` WHERE `status = 'confirmed'`. Two confirmed reservations on the same `(location_id, table_id)` whose 90-minute `tsrange` windows overlap cannot coexist; different locations with the same local `table_id` do not conflict.
+- `location_id TEXT NOT NULL REFERENCES locations(id)` (added 6.2, flipped NOT NULL in 6.4).
+- Primary range-scan index is `idx_reservations_location_date (location_id, date)` (6.4; replaced the date-only index).
+- `external_provider` / `external_id` (6.2, nullable) reserve a hook for future OpenTable / Resy / Square / Toast integration — `table_id` stays as the local cache.
+- Triggers: `set_updated_at` (BEFORE UPDATE), `notify_new_reservation` (AFTER INSERT → `pg_notify('new_reservation', ...)`, payload includes `location_id` since 6.4).
 - Statuses: `confirmed | cancelled | no_show | completed`.
 
-**`messages`** — management callback queue. Plain table, `unread | read | resolved`. Gained nullable `location_id` in 6.2.
+**`messages`** — management callback queue. Plain table, `unread | read | resolved`. `location_id` is still nullable; NOT NULL flip is a follow-up deploy after 6.4 has baked.
 
 **`calls`** — one row per phone session. **Partitioned by month** on `started_at`. PK is composite `(id, started_at)` because Postgres requires the partition key in every unique constraint. Partitions for current + next 2 months are seeded at migration time; `ensure_next_calls_partition()` (run by `pg_cron` on the 25th) creates the next one.
 - `transcript` and `tools_called` are `jsonb` with GIN indexes.
 - `reservation_id` / `message_id` FKs link a call to its outcome.
-- Gained nullable `location_id` in 6.2. The FK to `locations` propagates to each monthly partition automatically (PG 12+ cascades FKs on partitioned parents).
+- Gained `location_id` in 6.2 (nullable; NOT NULL flip is a follow-up deploy). The FK to `locations` propagates to each monthly partition automatically (PG 12+ cascades FKs on partitioned parents).
 
 **`call_analytics_daily`** — materialized view aggregating `calls` by day. Refreshed nightly by `pg_cron`. `scripts/report.js` and any future `/analytics` endpoint read from this, not from `calls` directly. Rewritten in 6.9 to group by `location_id`.
 
@@ -148,8 +150,8 @@ Migration: `scripts/migrate.js`. Idempotent. Extensions required: `pgcrypto`, `b
 
 | Channel | Emitted by | Consumed by |
 |---|---|---|
-| `new_reservation` | AFTER INSERT trigger on `reservations` | `server.js` LISTEN client → `sms.sendSmsConfirmation` |
-| `reminder_due` | `queue_upcoming_reminders()` pg_cron job (hourly) | `server.js` LISTEN client → `sms.sendSmsReminder` |
+| `new_reservation` | AFTER INSERT trigger on `reservations` | `server.js` LISTEN client → `sms.sendSmsConfirmation`. Payload includes `location_id` (6.4); consumed in 6.6 for per-tenant SMS routing. |
+| `reminder_due` | `queue_upcoming_reminders()` pg_cron job (hourly) | `server.js` LISTEN client → `sms.sendSmsReminder`. Payload includes `location_id` (6.4). |
 | `location_config_updated` | AFTER UPDATE trigger on `locations` | `server.js` LISTEN client → `locationStore.invalidate(msg.payload)` |
 
 The LISTEN client in `server.js` is a **dedicated** `pg.Client`, not checked out from the pool — `LISTEN` requires a long-lived connection. On error it auto-reconnects with a 5s backoff.
@@ -207,8 +209,8 @@ These are the things most likely to bite future edits. If you change any of them
 
 1. **Reservation IDs are lowercase 8-char hex.** The `cancel_reservation` handler `LOWER($1)` the input so callers can read codes with capital letters on the phone. Any UI that displays codes should preserve case-insensitivity.
 2. **Booking window is 90 minutes.** Hard-coded in both the DB exclusion constraint (`reservation_tsrange` helper in `migrate.js`) and `reservationStore.findConflictingTableIds`. Changing this requires updating **both** places *and* re-running the migration.
-3. **Valid reservation times are enumerated in `restaurant.json`** (`reservation_policy.slots` and `weekend_slots`). `check_availability` rejects anything not on the list before ever hitting the DB.
-4. **Last seating is 30 minutes before close.** Enforced in `check_availability`, derived from `restaurant.hours[day].close`.
+3. **Valid reservation times are enumerated per tenant** in `location.config.reservation_policy.slots` / `weekend_slots`. `check_availability` rejects anything not on the list before ever hitting the DB.
+4. **Last seating is 30 minutes before close.** Enforced in `check_availability`, derived from `location.config.hours[day].close`.
 5. **The Twilio webhook signature middleware only runs if `PUBLIC_URL` is set.** This is deliberate so local dev without a stable public URL still works, but in production `PUBLIC_URL` **must** be set — the startup env check guarantees that.
 6. **`app.set('trust proxy', 1)` is required on Railway.** Without it, `express-rate-limit` throws a `ValidationError` because `X-Forwarded-For` is unreachable.
 7. **`pendingCalls` Map is keyed by `CallSid`** and populated on `/incoming-call` so we can attach caller number to the WebSocket session on the `start` event. It's deleted on `start` to prevent unbounded growth; orphans (no matching WS) are effectively leaks, but low volume.
@@ -218,8 +220,11 @@ These are the things most likely to bite future edits. If you change any of them
 11. **Graceful shutdown order matters:** stop the scheduler, then close the notify client, then the pool. Closing the pool first leaves in-flight scheduler queries or the LISTEN connection dangling and produces an "SSL error: unexpected eof" in Postgres logs.
 12. **Do not commit `data/`.** It's gitignored legacy from the JSON-file era. Production reads nothing from it.
 13. **Scheduled jobs run in the Node process, not Postgres.** If the service has zero replicas or is mid-restart at the scheduled time, that tick is skipped — the jobs are idempotent, so a missed run is not fatal, but if you scale to >1 replica you will get duplicate ticks unless you add leader election.
-14. **Tenant-local "now" is derived from `restaurant.timezone`, not the server clock.** `buildSystemPrompt` (`src/systemPrompt.js`), `check_availability`, `cancel_reservation`'s `hoursUntil` calc, and SMS date formatting all compute "now" via Luxon `DateTime.now().setZone(restaurant.timezone)`. The server runs in UTC on Railway; using `new Date()` here silently shifts day-of-week and past/future decisions by the UTC offset. When multi-tenant lands (Phase 6), this source becomes `location.timezone`.
+14. **Tenant-local "now" is derived from `location.timezone`, not the server clock.** `buildSystemPrompt` (`src/systemPrompt.js`), `check_availability`, `cancel_reservation`'s `hoursUntil` calc, and SMS date formatting all compute "now" via Luxon `DateTime.now().setZone(location.timezone)`. The server runs in UTC on Railway; using `new Date()` here silently shifts day-of-week and past/future decisions by the UTC offset.
 15. **Tenant resolution is by inbound Twilio `To` number** via `locationStore.loadByTwilioNumber`. Unknown numbers get `UNKNOWN_NUMBER_TWIML` and a hangup; lookup errors (DB unreachable, etc.) get `TENANT_UNAVAILABLE_TWIML` — **never a silent fallback to a default tenant**. The cache TTL is 60s; config changes in the DB propagate sooner via `LISTEN location_config_updated` → `locationStore.invalidate`.
+16. **Every domain read/write must scope by `location_id`.** `reservations.no_double_booking` enforces this at the DB for bookings. `check_availability`, `cancel_reservation`, `addReservation`, `addMessage`, and `callLogger.setCallInfo` all pass `location.id` explicitly. Forgetting to scope a new query leaks data across tenants.
+17. **`conversation_initiation_client_data` must wait for both the ElevenLabs WS `open` event and the Twilio `start` event.** The tenant isn't known until `start` resolves the `CallSid` → `pendingCalls` → `location`; the EL WS opens strictly before that. `wss.on('connection', ...)` uses a `startP` promise to gate the init send.
+18. **NOT NULL on `messages.location_id` and `calls.location_id` is deferred to a follow-up deploy** ~24h after 6.4 ships. New code always writes `location_id`; once we've proven no row leaks through with NULL, a second migration flips the NOT NULL. Until then the columns stay permissive.
 
 ---
 

@@ -1,70 +1,51 @@
 /**
  * conversation.js
- * Text-based REPL for testing Claude + tools before adding the voice layer.
+ * Text-based REPL for testing Claude + tools without the voice layer.
+ * Fetches the Ember Room's location row from DB at startup so the tool
+ * handlers behave identically to the phone path.
+ *
  * Run with:  node src/conversation.js
  */
 
 require('dotenv').config();
 const readline  = require('readline');
+const { DateTime } = require('luxon');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const { TOOL_DEFINITIONS, handleToolCall } = require('./tools');
-const restaurant = require('../config/restaurant.json');
+const { buildSystemPrompt }                = require('./systemPrompt');
+const locationStore                        = require('./locationStore');
+const pool                                 = require('./db');
 
 const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const SYSTEM_PROMPT = `You are a friendly and professional reservations assistant for ${restaurant.name}, ${restaurant.tagline}.
-
-About the restaurant:
-${restaurant.description}
-
-Address: ${restaurant.address}
-Phone: ${restaurant.phone}
-
-Your job is to:
-1. Answer questions about the menu, hours, location, and policies
-2. Check table availability for requested dates and times
-3. Book reservations when the caller is ready
-
-Guidelines:
-- Be warm, concise, and conversational — this will eventually be a phone call
-- When checking availability or booking, always confirm the details back to the caller
-- If a slot isn't available, proactively suggest alternatives
-- For the date, always clarify the full date (day, month, year) to avoid confusion
-- Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-- Always use the tools to check real availability — never guess
-- After a successful booking, read out the confirmation code clearly`;
 
 // ─────────────────────────────────────────
 // Agentic loop: send message, handle tools, repeat
 // ─────────────────────────────────────────
 
-async function sendMessage(messages) {
+async function sendMessage(messages, systemPrompt, location) {
   let response = await client.messages.create({
     model:      'claude-sonnet-4-5',
     max_tokens: 1024,
-    system:     SYSTEM_PROMPT,
+    system:     systemPrompt,
     tools:      TOOL_DEFINITIONS,
     messages,
   });
 
-  // Keep processing until Claude stops using tools
   while (response.stop_reason === 'tool_use') {
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
 
-    // Build tool results
-    const toolResults = toolUseBlocks.map(block => {
+    const toolResults = await Promise.all(toolUseBlocks.map(async (block) => {
       console.log(`\n  🔧 Tool call: ${block.name}(${JSON.stringify(block.input)})`);
-      const result = handleToolCall(block.name, block.input);
+      const result = await handleToolCall(block.name, block.input, location);
       console.log(`  📋 Result:    ${JSON.stringify(result).slice(0, 120)}…`);
       return {
         type:       'tool_result',
         tool_use_id: block.id,
         content:    JSON.stringify(result),
       };
-    });
+    }));
 
-    // Append assistant turn + tool results, then call again
     messages = [
       ...messages,
       { role: 'assistant', content: response.content },
@@ -74,13 +55,12 @@ async function sendMessage(messages) {
     response = await client.messages.create({
       model:      'claude-sonnet-4-5',
       max_tokens: 1024,
-      system:     SYSTEM_PROMPT,
+      system:     systemPrompt,
       tools:      TOOL_DEFINITIONS,
       messages,
     });
   }
 
-  // Extract final text reply
   const textBlock = response.content.find(b => b.type === 'text');
   return { reply: textBlock?.text ?? '(no text response)', messages };
 }
@@ -90,8 +70,17 @@ async function sendMessage(messages) {
 // ─────────────────────────────────────────
 
 async function main() {
+  const location = await locationStore.loadById('ember-room');
+  if (!location) {
+    console.error('No ember-room location found — run scripts/backfill-tenant.js first.');
+    process.exit(1);
+  }
+
+  const now = DateTime.now().setZone(location.timezone);
+  const systemPrompt = buildSystemPrompt(location, now);
+
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`  ${restaurant.name} — Voice Agent (Text Mode)`);
+  console.log(`  ${location.name} — Voice Agent (Text Mode)`);
   console.log('  Type your message and press Enter.');
   console.log('  Type "exit" to quit.');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
@@ -99,13 +88,12 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let messages = [];
 
-  // Opening greeting
   const { reply, messages: updated } = await sendMessage([
     { role: 'user', content: 'Hello, I just called the restaurant.' },
-  ]);
+  ], systemPrompt, location);
   messages = updated;
   messages.push({ role: 'assistant', content: reply });
-  console.log(`\n🍽️  ${restaurant.name}: ${reply}\n`);
+  console.log(`\n🍽️  ${location.name}: ${reply}\n`);
 
   const ask = () => {
     rl.question('You: ', async (input) => {
@@ -114,15 +102,16 @@ async function main() {
       if (trimmed.toLowerCase() === 'exit') {
         console.log('\nGoodbye!\n');
         rl.close();
+        await pool.end().catch(() => {});
         return;
       }
 
       try {
         messages.push({ role: 'user', content: trimmed });
-        const { reply, messages: updated } = await sendMessage(messages);
+        const { reply, messages: updated } = await sendMessage(messages, systemPrompt, location);
         messages = updated;
         messages.push({ role: 'assistant', content: reply });
-        console.log(`\n🍽️  ${restaurant.name}: ${reply}\n`);
+        console.log(`\n🍽️  ${location.name}: ${reply}\n`);
       } catch (err) {
         console.error('\n❌ Error:', err.message, '\n');
       }

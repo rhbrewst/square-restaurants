@@ -13,7 +13,6 @@ const { sendSmsConfirmation, sendSmsReminder } = require('./sms');
 const { startScheduler, stopScheduler }   = require('./scheduler');
 const { buildSystemPrompt }               = require('./systemPrompt');
 const locationStore                       = require('./locationStore');
-const restaurant = require('../config/restaurant.json');
 
 // TwiML served when tenant resolution fails. Two variants so the prod logs
 // make it clear which branch was hit without needing to correlate with the
@@ -63,12 +62,16 @@ app.use(express.json());
 // ─── Rate limiting (Task 2.2) ─────────────────────────────────────────────────
 // Cap webhook hits to guard against accidental or malicious flooding.
 
+// Key by the inbound Twilio `To` number so noisy traffic against one tenant
+// can't starve the budget for another. Falls back to req.ip when `To` isn't
+// present (non-Twilio hits, malformed webhook).
 const callLimiter = rateLimit({
-  windowMs:       60_000,
-  max:            20,
+  windowMs:        60_000,
+  max:             20,
   standardHeaders: true,
-  legacyHeaders:  false,
-  message:        'Too many requests',
+  legacyHeaders:   false,
+  message:         'Too many requests',
+  keyGenerator:    (req) => req.body?.To || req.ip,
 });
 
 app.use('/incoming-call', callLimiter);
@@ -146,22 +149,36 @@ wss.on('connection', (twilioWs) => {
 
   let streamSid = null;
   let callSid   = null;   // hoisted for ElevenLabs error recovery (Task 3.3)
+  let location  = null;   // populated when Twilio `start` resolves startP
   const logger  = startCall();
+
+  // Two-gate pattern: the EL WebSocket opens before Twilio sends its `start`
+  // event, but we can't build the system prompt without the tenant. Hold the
+  // init send until BOTH the WS is open AND Twilio has told us the CallSid.
+  let resolveStart;
+  const startP = new Promise((r) => { resolveStart = r; });
 
   const elWs = new WebSocket(
     `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_AGENT_ID}`,
     { headers: { 'xi-api-key': ELEVENLABS_API_KEY } },
   );
 
-  elWs.on('open', () => {
+  elWs.on('open', async () => {
     console.log('✅ ElevenLabs connected');
-    const now = DateTime.now().setZone(restaurant.timezone);
+    const callInfo = await startP;
+    location = callInfo?.location || null;
+    if (!location) {
+      console.error('No location resolved for this call — closing EL WS');
+      elWs.close(1011, 'no_location');
+      return;
+    }
+    const now = DateTime.now().setZone(location.timezone);
     elWs.send(JSON.stringify({
       type: 'conversation_initiation_client_data',
       conversation_config_override: {
         agent: {
-          prompt:        { prompt: buildSystemPrompt(restaurant, now) },
-          first_message: `Thank you for calling ${restaurant.name}. How can I help you today?`,
+          prompt:        { prompt: buildSystemPrompt(location, now) },
+          first_message: `Thank you for calling ${location.name}. How can I help you today?`,
         },
       },
     }));
@@ -177,9 +194,16 @@ wss.on('connection', (twilioWs) => {
         streamSid = msg.start.streamSid;
         callSid   = msg.start.callSid;
         console.log(`📡 Media stream started (${streamSid})`);
-        const callInfo = pendingCalls.get(msg.start.callSid) || {};
+        const callInfo = pendingCalls.get(msg.start.callSid) || null;
         pendingCalls.delete(msg.start.callSid);
-        logger.setCallInfo({ ...callInfo, streamSid });
+        logger.setCallInfo({
+          callSid:    msg.start.callSid,
+          streamSid,
+          from:       callInfo?.from || null,
+          to:         callInfo?.to   || null,
+          locationId: callInfo?.location?.id || null,
+        });
+        resolveStart(callInfo);
         break;
       }
 
@@ -250,7 +274,7 @@ wss.on('connection', (twilioWs) => {
         console.log(`\n🔧  Tool  : ${tool_name}(${JSON.stringify(parameters)})`);
         try {
           const t0      = Date.now();
-          const result  = await handleToolCall(tool_name, parameters);
+          const result  = await handleToolCall(tool_name, parameters, location);
           const latency = Date.now() - t0;
           console.log(`📋  Result: ${JSON.stringify(result).slice(0, 120)}…\n`);
           logger.logToolCall(tool_name, parameters, result, latency);
@@ -300,9 +324,12 @@ wss.on('connection', (twilioWs) => {
 
     if (isUnexpected && twilioWs.readyState === WebSocket.OPEN && callSid) {
       try {
+        const apology = location?.name
+          ? `I'm sorry, ${location.name} is having a technical difficulty. Please call back in a moment and we'll be happy to help you.`
+          : `I'm sorry, we're having a technical difficulty. Please call back in a moment and we'll be happy to help you.`;
         const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
         await twilioClient.calls(callSid).update({
-          twiml: `<Response><Say voice="Polly.Joanna">I'm sorry, I'm having a technical difficulty. Please call back in a moment and we'll be happy to help you.</Say><Hangup/></Response>`,
+          twiml: `<Response><Say voice="Polly.Joanna">${apology}</Say><Hangup/></Response>`,
         });
       } catch (e) {
         console.error('Failed to inject TwiML fallback:', e.message);
@@ -409,7 +436,7 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 
 server.listen(PORT, () => {
   console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`  ${restaurant.name} — Voice Server`);
+  console.log(`  Square Restaurants — Voice Server`);
   console.log(`  Listening on port ${PORT}`);
   console.log(`  POST /incoming-call  ← point Twilio webhook here`);
   console.log(`  GET  /health`);
