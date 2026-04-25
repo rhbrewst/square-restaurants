@@ -15,4 +15,5 @@ Stale architecture docs are worse than none. If the code and the doc disagree, t
 ## Other references in this repo
 
 - **[PRODUCTION_PLAN.md](PRODUCTION_PLAN.md)** — the task-by-task playbook for phases 1–6. Describes the *plan*, not the current state.
+- **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)** — bugs and design limitations that are surfaced and understood but not yet fixed. **Check this before filing or fixing a bug** — the entry's "Fix sketch" may already exist. When a fix lands, the PR deletes the entry in the same diff.
 - **[README.md](README.md)** — first-time setup (accounts, env vars, dev loop).
