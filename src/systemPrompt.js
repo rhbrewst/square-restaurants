@@ -15,6 +15,93 @@ const TOOL_DESCRIPTIONS = {
     '- leave_message(caller_name, caller_phone, subject, message) — use when someone has feedback, a complaint, a lost item, a private event inquiry, or any request that needs management follow-up. Always get their name and number first.',
 };
 
+// ─── Per-tenant fact helpers ─────────────────────────────────────────────────
+// Each helper reads from location.config and returns a one-line fact for the
+// "Key facts" block, or null to skip. The point of these is to keep the prompt
+// truthful for whichever tenant is on the call — every fact lived as hardcoded
+// English in this file before The Tide House surfaced "We do not have outdoor
+// seating" leaking onto a tenant that very much does have a patio.
+
+function depositFact(pol) {
+  if (!pol?.deposit_required_party_size || !pol?.deposit_amount_per_person) return null;
+  return (
+    `Reservations are FREE for parties of 1–${pol.deposit_required_party_size - 1}. ` +
+    `A $${pol.deposit_amount_per_person}/person deposit (credited to the bill) is required for parties of ${pol.deposit_required_party_size}+.`
+  );
+}
+
+function autoGratuityFact(pay) {
+  const g = pay?.auto_gratuity;
+  if (!g?.percentage || !g?.applies_to_party_size) return null;
+  return (
+    `Auto-gratuity of ${g.percentage}% is added for parties of ${g.applies_to_party_size}+. ` +
+    `For smaller parties gratuity is at the guest's discretion.`
+  );
+}
+
+function accessibilityFact(cfg) {
+  // Prefer a tenant-supplied human note; fall back to deriving one from the
+  // structured booleans for tenants whose config (Ember) predates the `.note`
+  // convention.
+  if (cfg.accessibility?.note) return cfg.accessibility.note;
+  const a = cfg.accessibility;
+  if (a?.step_free_entrance && a?.accessible_restrooms) {
+    return 'We are fully wheelchair accessible — step-free entrance, accessible restrooms and tables.';
+  }
+  return null;
+}
+
+function kidsFact(cfg) {
+  if (cfg.kids?.note) return cfg.kids.note;
+  if (cfg.kids?.high_chairs && cfg.kids?.booster_seats) {
+    return 'We have high chairs and booster seats for children.';
+  }
+  return null;
+}
+
+function barFact(cfg) {
+  if (cfg.bar?.note) return cfg.bar.note;
+  if (cfg.bar?.seat_count) {
+    return `Bar seating has ${cfg.bar.seat_count} seats and the full menu is available at the bar.`;
+  }
+  return null;
+}
+
+function happyHourFact(cfg) {
+  return cfg.happy_hour?.note || null;
+}
+
+function outdoorSeatingFact(cfg) {
+  if (cfg.seating?.outdoor_note) return cfg.seating.outdoor_note;
+  return cfg.seating?.outdoor_seating
+    ? 'We have outdoor seating.'
+    : 'We do not have outdoor seating.';
+}
+
+function petsFact(cfg) {
+  return cfg.pets?.note || 'Service animals are always welcome. Pets are not permitted.';
+}
+
+function buildKeyFacts(cfg, pol, pay) {
+  const lines = [
+    depositFact(pol),
+    autoGratuityFact(pay),
+    accessibilityFact(cfg),
+    kidsFact(cfg),
+    barFact(cfg),
+    happyHourFact(cfg),
+    outdoorSeatingFact(cfg),
+    petsFact(cfg),
+    'For lost and found, feedback, complaints, private event inquiries, farm/supplier questions, ' +
+      'or anything else you cannot fully resolve, offer to take a message so management can call them back. ' +
+      'Do NOT just redirect them to ring the main line — collect their name, phone number, and details ' +
+      'using the leave_message tool.',
+  ];
+  return lines.filter(Boolean).map((l) => `- ${l}`).join('\n');
+}
+
+// ─── Main ────────────────────────────────────────────────────────────────────
+
 function buildSystemPrompt(location, now) {
   const nowLocal = now ?? DateTime.now().setZone(location.timezone);
   const todayStr = nowLocal.toFormat('cccc, LLLL d, yyyy');
@@ -42,15 +129,7 @@ Hours:
 ${Object.entries(cfg.hours).map(([d, h]) => `  ${d.charAt(0).toUpperCase() + d.slice(1)}: ${h.open}–${h.close} (kitchen closes ${h.kitchen_close})`).join('\n')}
 
 Key facts you must know and state accurately — never guess these:
-- Reservations are FREE for parties of 1–${pol.deposit_required_party_size - 1}. A $${pol.deposit_amount_per_person}/person deposit (credited to the bill) is required for parties of ${pol.deposit_required_party_size}+.
-- Auto-gratuity of ${pay.auto_gratuity.percentage}% is added for parties of ${pay.auto_gratuity.applies_to_party_size}+. For smaller parties gratuity is at the guest's discretion.
-- We are fully wheelchair accessible — step-free entrance, accessible restrooms and tables.
-- We have high chairs and booster seats for children.
-- Bar seating has ${cfg.bar.seat_count} seats, is walk-in only (not reservable), and the full menu is available at the bar.
-- Happy hour is Mon–Fri ${cfg.happy_hour.start}–${cfg.happy_hour.end} at the bar only.
-- We do not have outdoor seating.
-- Service animals are always welcome. Pets are not permitted.
-- For lost and found, feedback, complaints, private event inquiries, farm/supplier questions, or anything else you cannot fully resolve, offer to take a message so management can call them back. Do NOT just redirect them to ring the main line — collect their name, phone number, and details using the leave_message tool.
+${buildKeyFacts(cfg, pol, pay)}
 
 Your tools:
 ${toolLines}
@@ -66,4 +145,4 @@ Guidelines:
 - Keep responses brief and natural for voice — no bullet points, no markdown`;
 }
 
-module.exports = { buildSystemPrompt, TOOL_DESCRIPTIONS };
+module.exports = { buildSystemPrompt, buildKeyFacts, TOOL_DESCRIPTIONS };
