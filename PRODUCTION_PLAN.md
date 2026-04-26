@@ -1330,7 +1330,1237 @@ Runs as part of 6.4, 6.5, and 6.10. Seed two locations `A` and `B` (different ti
 Phase 1 (DB)    →  Phase 2 (Security)  →  Phase 3 (Reliability)
                 →  Phase 4 (Experience)
                 →  Phase 5 (Deploy)
-                →  Phase 6 (Multi-Tenant Refactor)
+                →  Phase 6 (Multi-Tenant Refactor)        [6.1–6.7 done; 6.8–6.10 = deferred polish]
+                →  Phase 7 (New Verticals: Salon & Auto Detailing)
+                +  Phase 8 (Demo Readiness)               ← runs in parallel with Phase 7
+
+Phase 9 (Latency Optimization) is deferred until production traffic exists.
+Without traffic, instrumentation has no signal to feed it and infra spend has no
+caller to justify it; revisit when call volume warrants.
 ```
 
-Phases 1–5 are complete. Phase 6 supersedes the originally-planned "ops polish" — hot-reloaded config and `/analytics` are delivered as sub-tasks 6.3 and 6.9 of the multi-tenant work. Within Phase 6, the critical path is **6.1 → 6.2 → 6.3 → 6.4** (preflight → schema → backfill → code threading + constraint swap). 6.5 (timezone) can land any time after 6.4; it's grouped with the refactor because fixing it is nearly free while `buildSystemPrompt` is being refactored anyway. 6.6 depends on 6.4's NOTIFY payload update. 6.7 → 6.8 → 6.9 are largely independent and can run in parallel. 6.10 is the final cutover and must follow everything else.
+Phases 1–5 are complete. Phase 6 supersedes the originally-planned "ops polish" — hot-reloaded config and `/analytics` are delivered as sub-tasks 6.3 and 6.9 of the multi-tenant work. Within Phase 6, the critical path is **6.1 → 6.2 → 6.3 → 6.4 → 6.7** (preflight → schema → backfill → code threading + constraint swap → onboarding CLI). 6.5 (timezone) landed alongside 6.4 since fixing it was nearly free while `buildSystemPrompt` was being refactored. 6.6 depends on 6.4's NOTIFY payload update. **6.7 is the gate for Phase 7** — once the onboarding CLI is in, new tenants (including non-restaurant verticals) can be seeded. 6.8 (admin endpoint), 6.9 (analytics-by-location), and 6.10 (final cutover that deletes `restaurant.json`) are non-blocking polish; they can run in parallel with Phase 7 or be deferred indefinitely. None of them gate demo calls.
+
+---
+
+## Phase 7 — New Verticals: Salon & Auto Detailing
+
+Convert the platform from restaurant-only to multi-vertical by adding appointment-based booking for salons and auto detailers. Both new client types share the same domain schema (`appointments` / `services` / `staff` / `resources`) and the same five tool names — only the underlying data and system prompt copy differ. The existing restaurant vertical is completely unaffected.
+
+**Prerequisite:** Phase 6 through **Task 6.7** must be complete — tenant resolution and `location.vertical` threaded through the call path (6.4), and the onboarding CLI (`scripts/create-location.js`) so a salon or detailer can be seeded from a committed JSON file. Tasks 6.8 (admin endpoint), 6.9 (analytics-by-location), and 6.10 (final cutover) are NOT prerequisites — they're polish that can run in parallel with Phase 7 or after it.
+
+### Design decisions (pinned)
+
+- **Parallel domain schema, not a unified abstraction.** `appointments` / `services` / `staff` / `resources` run alongside `reservations` / `location_tables`. Forcing a single abstract "bookable event" model to cover restaurants and salons would create impedance mismatch on both sides and make the code harder to reason about. The dispatch layer in `src/tools.js` picks the right handler set from `location.vertical`.
+
+- **Shared schema across appointment-based verticals.** Salons and auto detailers both book a service + duration. They share the same four tables. The difference is that salons primarily constrain on `staff_id`; detailers primarily constrain on `resource_id` (bay/station). The exclusion constraints handle each dimension independently and can coexist on the same row.
+
+- **Same tool names, different data.** Both verticals expose `get_services`, `check_appointment_availability`, `book_appointment`, `cancel_appointment`. Only salons expose `get_staff`. The handlers are vertical-specific but the agent's surface is consistent — only one set of tool schemas needs to be registered in the ElevenLabs dashboard.
+
+- **`vertical` CHECK widened in this phase.** `'salon'` and `'auto_detailing'` are added as valid values. The onboarding CLI validates this field before inserting.
+
+- **Auto detailing: 15–20 regular clients.** The first deployment is a standard inbound booking agent. Regular-client recognition (by phone number) is flagged as a future enhancement. The `client_context` config field lets the owner provide plain-text framing that the agent reads in its system prompt ("We primarily serve our regular client base — if you're new, please mention that so we can check availability").
+
+- **Confirmation codes.** Appointment IDs follow the same `encode(gen_random_bytes(4), 'hex')` format as reservation IDs. Phone-number verification on cancellation is identical.
+
+- **ElevenLabs dashboard tool registration is a separate, manual prerequisite.** The new tool names (`get_services`, `get_staff`, `check_appointment_availability`, `book_appointment`, `cancel_appointment`) must be registered as Client tools on the existing ElevenLabs agent before the first call to a salon or detailer number. This is a once-per-deployment console action, not code — but it gates demo calls and is invisible from the repo. Track it on the deployment checklist alongside Twilio webhook configuration.
+
+---
+
+### Task 7.1 — Widen `vertical` CHECK; add appointment-domain schema
+
+Append to `scripts/migrate.js` (idempotent; do not modify earlier DDL blocks):
+
+```sql
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Widen locations.vertical to include new verticals
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE locations DROP CONSTRAINT IF EXISTS locations_vertical_check;
+ALTER TABLE locations ADD CONSTRAINT locations_vertical_check
+  CHECK (vertical IN ('restaurant', 'salon', 'auto_detailing'));
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SERVICES — bookable offerings. Shared by salon and auto_detailing.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS services (
+  location_id       TEXT     NOT NULL REFERENCES locations(id),
+  id                TEXT     NOT NULL,          -- slug, e.g. 'full-detail'
+  name              TEXT     NOT NULL,          -- 'Full Interior & Exterior Detail'
+  description       TEXT     NOT NULL DEFAULT '',
+  duration_minutes  SMALLINT NOT NULL,
+  price_cents       INTEGER,                    -- NULL = 'call for pricing'
+  active            BOOLEAN  NOT NULL DEFAULT TRUE,
+  PRIMARY KEY (location_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_services_location ON services (location_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- STAFF — service providers. Required for salons; not used by detailers.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS staff (
+  location_id  TEXT     NOT NULL REFERENCES locations(id),
+  id           TEXT     NOT NULL,          -- slug, e.g. 'jessica'
+  name         TEXT     NOT NULL,
+  services     TEXT[]   NOT NULL DEFAULT '{}',  -- array of service.id values this person performs
+  active       BOOLEAN  NOT NULL DEFAULT TRUE,
+  PRIMARY KEY (location_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_staff_location ON staff (location_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- RESOURCES — physical capacity (bays, stations). Used by auto_detailing;
+-- optional for salons with room-limited capacity.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS resources (
+  location_id  TEXT     NOT NULL REFERENCES locations(id),
+  id           TEXT     NOT NULL,          -- slug, e.g. 'bay-1'
+  name         TEXT     NOT NULL,
+  notes        TEXT,
+  active       BOOLEAN  NOT NULL DEFAULT TRUE,
+  PRIMARY KEY (location_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_resources_location ON resources (location_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- APPOINTMENTS — bookings for appointment-based verticals.
+-- staff_id is the primary exclusion axis for salons (one stylist = one client at a time).
+-- resource_id is the primary exclusion axis for detailers (one bay = one vehicle at a time).
+-- Both constraints can coexist on the same row.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS appointments (
+  id               TEXT        PRIMARY KEY DEFAULT encode(gen_random_bytes(4), 'hex'),
+  location_id      TEXT        NOT NULL REFERENCES locations(id),
+  service_id       TEXT        NOT NULL,
+  staff_id         TEXT,                   -- NULL = 'any available'; assigned before service
+  resource_id      TEXT,                   -- NULL = no resource tracking at this location
+  start_at         TIMESTAMPTZ NOT NULL,   -- stored as UTC; display in location.timezone
+  duration_minutes SMALLINT    NOT NULL,
+  customer_name    TEXT        NOT NULL,
+  customer_phone   TEXT        NOT NULL,
+  notes            TEXT        NOT NULL DEFAULT '',
+  status           TEXT        NOT NULL DEFAULT 'confirmed'
+                               CHECK (status IN ('confirmed','cancelled','no_show','completed')),
+  reminder_sent    BOOLEAN     NOT NULL DEFAULT FALSE,
+  cancelled_at     TIMESTAMPTZ,
+  cancellation_reason TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  FOREIGN KEY (location_id, service_id)  REFERENCES services  (location_id, id),
+  FOREIGN KEY (location_id, staff_id)    REFERENCES staff      (location_id, id)
+    DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (location_id, resource_id) REFERENCES resources  (location_id, id)
+    DEFERRABLE INITIALLY DEFERRED,
+
+  -- Prevent double-booking a staff member
+  CONSTRAINT no_double_booking_staff EXCLUDE USING gist (
+    location_id WITH =,
+    staff_id    WITH =,
+    tsrange(start_at,
+            start_at + (duration_minutes || ' minutes')::interval,
+            '[)') WITH &&
+  ) WHERE (status = 'confirmed' AND staff_id IS NOT NULL),
+
+  -- Prevent double-booking a resource (bay/station)
+  CONSTRAINT no_double_booking_resource EXCLUDE USING gist (
+    location_id  WITH =,
+    resource_id  WITH =,
+    tsrange(start_at,
+            start_at + (duration_minutes || ' minutes')::interval,
+            '[)') WITH &&
+  ) WHERE (status = 'confirmed' AND resource_id IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_appointments_location  ON appointments (location_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_start_at  ON appointments (location_id, start_at);
+CREATE INDEX IF NOT EXISTS idx_appointments_phone     ON appointments (customer_phone);
+CREATE INDEX IF NOT EXISTS idx_appointments_status    ON appointments (status);
+CREATE INDEX IF NOT EXISTS idx_appointments_staff     ON appointments (location_id, staff_id, start_at)
+  WHERE staff_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_appointments_resource  ON appointments (location_id, resource_id, start_at)
+  WHERE resource_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_appointments_reminder  ON appointments (start_at)
+  WHERE status = 'confirmed' AND reminder_sent = FALSE;
+
+DROP TRIGGER IF EXISTS appointments_updated_at ON appointments;
+CREATE TRIGGER appointments_updated_at
+  BEFORE UPDATE ON appointments
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- NOTIFY on new appointment (mirrors notify_new_reservation)
+CREATE OR REPLACE FUNCTION notify_new_appointment()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  svc services%ROWTYPE;
+BEGIN
+  SELECT * INTO svc FROM services WHERE location_id = NEW.location_id AND id = NEW.service_id;
+  PERFORM pg_notify(
+    'new_appointment',
+    json_build_object(
+      'id',               NEW.id,
+      'location_id',      NEW.location_id,
+      'customer_name',    NEW.customer_name,
+      'customer_phone',   NEW.customer_phone,
+      'service_name',     svc.name,
+      'start_at',         NEW.start_at,
+      'duration_minutes', NEW.duration_minutes
+    )::text
+  );
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS appointment_notify ON appointments;
+CREATE TRIGGER appointment_notify
+  AFTER INSERT ON appointments
+  FOR EACH ROW EXECUTE FUNCTION notify_new_appointment();
+```
+
+Update `queue_upcoming_reminders()` in `scripts/migrate.js` to also sweep the `appointments` table:
+
+```sql
+CREATE OR REPLACE FUNCTION queue_upcoming_reminders()
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE r RECORD;
+BEGIN
+  -- Existing: restaurant reservations
+  FOR r IN
+    SELECT id, customer_name, customer_phone, date, time, party_size, location_id
+    FROM reservations
+    WHERE status = 'confirmed' AND reminder_sent = FALSE
+      AND (date::text || ' ' || time::text)::timestamp
+          BETWEEN NOW() + interval '23 hours' AND NOW() + interval '25 hours'
+  LOOP
+    UPDATE reservations SET reminder_sent = TRUE WHERE id = r.id;
+    PERFORM pg_notify('reminder_due',
+      json_build_object('type','reservation','id',r.id,'location_id',r.location_id,
+        'customer_name',r.customer_name,'customer_phone',r.customer_phone,
+        'date',r.date,'time',r.time,'party_size',r.party_size)::text);
+  END LOOP;
+
+  -- New: appointments (salon / auto_detailing)
+  FOR r IN
+    SELECT a.id, a.customer_name, a.customer_phone, a.start_at,
+           a.duration_minutes, a.location_id, s.name AS service_name
+    FROM appointments a
+    JOIN services s ON s.location_id = a.location_id AND s.id = a.service_id
+    WHERE a.status = 'confirmed' AND a.reminder_sent = FALSE
+      AND a.start_at BETWEEN NOW() + interval '23 hours' AND NOW() + interval '25 hours'
+  LOOP
+    UPDATE appointments SET reminder_sent = TRUE WHERE id = r.id;
+    PERFORM pg_notify('reminder_due',
+      json_build_object('type','appointment','id',r.id,'location_id',r.location_id,
+        'customer_name',r.customer_name,'customer_phone',r.customer_phone,
+        'start_at',r.start_at,'duration_minutes',r.duration_minutes,
+        'service_name',r.service_name)::text);
+  END LOOP;
+END;
+$$;
+```
+
+Update `src/server.js` LISTEN setup to subscribe to the new channel:
+
+```js
+await notifyClient.query('LISTEN new_appointment');
+// In the notification handler:
+if (msg.channel === 'new_appointment') {
+  await sendSmsAppointmentConfirmation(JSON.parse(msg.payload));
+}
+// In reminder_due handler, branch on payload.type:
+if (msg.channel === 'reminder_due') {
+  const payload = JSON.parse(msg.payload);
+  if (payload.type === 'reservation') await sendSmsReminder(payload);
+  if (payload.type === 'appointment')  await sendSmsAppointmentReminder(payload);
+}
+```
+
+**Ship boundary:** schema and NOTIFY plumbing only. No application code reads from these tables yet.
+**Rollback:** `DROP TABLE appointments, resources, staff, services CASCADE;` and revert the CHECK constraint to `('restaurant')` only.
+
+---
+
+### Task 7.2 — `src/appointmentStore.js`
+
+New module, mirrors `reservationStore.js`. All functions are `async` and tenant-scoped.
+
+```js
+const pool = require('./db');
+const { DateTime } = require('luxon');
+
+// Returns available time slots for a given service on a given date.
+// Generates the full slot list from the location's operating hours, then subtracts
+// intervals already blocked by confirmed appointments.
+// Returns: { service: { name, duration_minutes, price_cents }, slots: [{ time, staff_id, staff_name }] }
+// or { error: 'service_not_found' | 'location_closed' }
+async function findAvailableSlots(locationId, serviceId, date, staffId = null) {
+  const { rows: svcRows } = await pool.query(
+    `SELECT id, name, duration_minutes, price_cents
+     FROM services WHERE location_id = $1 AND id = $2 AND active`,
+    [locationId, serviceId]
+  );
+  if (!svcRows.length) return { error: 'service_not_found' };
+  const svc = svcRows[0];
+
+  // Load booked intervals for this date (all staff + resources at this location)
+  const { rows: booked } = await pool.query(
+    `SELECT staff_id, resource_id,
+            start_at,
+            start_at + (duration_minutes || ' minutes')::interval AS end_at
+     FROM appointments
+     WHERE location_id = $1
+       AND status = 'confirmed'
+       AND start_at::date = $2::date
+       ${staffId ? 'AND (staff_id = $3 OR staff_id IS NULL)' : ''}`,
+    staffId ? [locationId, date, staffId] : [locationId, date]
+  );
+
+  // Slot generation is application-side: caller passes location (with hours) from locationStore cache.
+  // This function is called from the tool handler which already has the hydrated location object —
+  // pass it through rather than fetching again.
+  // See inline documentation in the file for the iteration logic.
+  // Returns slots in the location's timezone as 'HH:mm' strings.
+
+  return { service: svc, slots: buildSlots(svc.duration_minutes, date, booked) };
+}
+
+async function bookAppointment({
+  locationId, serviceId, staffId, resourceId,
+  startAt, customerName, customerPhone, notes
+}) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO appointments
+         (location_id, service_id, staff_id, resource_id, start_at,
+          duration_minutes, customer_name, customer_phone, notes)
+       SELECT $1, $2, $3, $4, $5::timestamptz,
+              s.duration_minutes, $6, $7, $8
+       FROM services s WHERE s.location_id = $1 AND s.id = $2 AND s.active
+       RETURNING id, start_at, duration_minutes`,
+      [locationId, serviceId, staffId || null, resourceId || null,
+       startAt, customerName, customerPhone, notes || '']
+    );
+    if (!rows.length) return { success: false, reason: 'Service not found or inactive.' };
+    return { success: true, confirmation_code: rows[0].id, start_at: rows[0].start_at };
+  } catch (err) {
+    if (err.code === '23P01') {  // exclusion violation
+      return { success: false, reason: 'That slot is no longer available. Please choose another time.' };
+    }
+    throw err;
+  }
+}
+
+async function cancelAppointment({ locationId, confirmationCode, customerPhone, reason }) {
+  const { rows } = await pool.query(
+    `SELECT * FROM appointments
+     WHERE id = $1 AND location_id = $2 AND status = 'confirmed'`,
+    [confirmationCode.toLowerCase(), locationId]
+  );
+  if (!rows.length) return { success: false, reason: 'No confirmed appointment found with that code.' };
+
+  const appt = rows[0];
+  const phoneDigits  = customerPhone.replace(/\D/g, '').slice(-10);
+  const storedDigits = appt.customer_phone.replace(/\D/g, '').slice(-10);
+  if (phoneDigits !== storedDigits) {
+    return { success: false, reason: 'Phone number does not match. Please double-check.' };
+  }
+
+  await pool.query(
+    `UPDATE appointments
+     SET status = 'cancelled', cancelled_at = NOW(), cancellation_reason = $2
+     WHERE id = $1`,
+    [appt.id, reason || null]
+  );
+  return { success: true, confirmation_code: appt.id, start_at: appt.start_at };
+}
+
+module.exports = { findAvailableSlots, bookAppointment, cancelAppointment };
+```
+
+---
+
+### Task 7.3 — Tool definitions and handlers for appointment verticals
+
+Add to `src/tools.js` alongside `RESTAURANT_TOOL_DEFINITIONS` and `RESTAURANT_HANDLERS`. These are only surfaced to the agent when `location.vertical !== 'restaurant'` (enforced in Task 7.4).
+
+```js
+const APPOINTMENT_TOOL_DEFINITIONS = [
+  {
+    name: 'get_services',
+    description:
+      'Returns the list of available services with durations and prices. ' +
+      'Call this at the start of any booking conversation.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_staff',
+    description:
+      'Returns staff members and the services each performs. ' +
+      'Only call this if the caller requests a specific person.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'check_appointment_availability',
+    description:
+      'Returns available time slots for a service on a given date. ' +
+      'Optionally filter by a specific staff member. ' +
+      'Always call this before attempting to book.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        service_id: { type: 'string', description: 'Service slug from get_services' },
+        date:       { type: 'string', description: 'YYYY-MM-DD' },
+        staff_id:   { type: 'string', description: 'Optional: staff slug from get_staff' },
+      },
+      required: ['service_id', 'date'],
+    },
+  },
+  {
+    name: 'book_appointment',
+    description:
+      'Books an appointment. Must confirm all details with the caller before calling this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        service_id:     { type: 'string' },
+        staff_id:       { type: 'string', description: 'Specific staff slug, or omit for any available' },
+        date:           { type: 'string', description: 'YYYY-MM-DD' },
+        time:           { type: 'string', description: 'HH:MM in 24-hour format' },
+        customer_name:  { type: 'string' },
+        customer_phone: { type: 'string' },
+        notes:          { type: 'string', description: 'Special requests, vehicle make/model for detailers, etc.' },
+      },
+      required: ['service_id', 'date', 'time', 'customer_name', 'customer_phone'],
+    },
+  },
+  {
+    name: 'cancel_appointment',
+    description:
+      'Cancels an existing appointment by confirmation code. Requires the phone number used to book.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        confirmation_code: { type: 'string' },
+        customer_phone:    { type: 'string' },
+        reason:            { type: 'string' },
+      },
+      required: ['confirmation_code', 'customer_phone'],
+    },
+  },
+];
+
+// ─── Handlers ────────────────────────────────────────────────────────────────
+
+async function handle_get_services(_, location) {
+  const { rows } = await pool.query(
+    `SELECT id, name, description, duration_minutes, price_cents
+     FROM services WHERE location_id = $1 AND active ORDER BY duration_minutes`,
+    [location.id]
+  );
+  return {
+    services: rows.map(s => ({
+      id:          s.id,
+      name:        s.name,
+      description: s.description,
+      duration:    `${s.duration_minutes} minutes`,
+      price:       s.price_cents ? `$${(s.price_cents / 100).toFixed(0)}` : 'Call for pricing',
+    })),
+  };
+}
+
+async function handle_get_staff(_, location) {
+  const { rows } = await pool.query(
+    `SELECT st.id, st.name,
+            array_agg(s.name ORDER BY s.name) AS service_names
+     FROM staff st
+     LEFT JOIN services s ON s.location_id = st.location_id AND s.id = ANY(st.services) AND s.active
+     WHERE st.location_id = $1 AND st.active
+     GROUP BY st.id, st.name`,
+    [location.id]
+  );
+  return { staff: rows.map(r => ({ id: r.id, name: r.name, services: r.service_names })) };
+}
+
+async function handle_check_appointment_availability({ service_id, date, staff_id }, location, session) {
+  // Pre-cache hit path (Task 9.2, deferred) checked first if session is provided
+  if (session?.availabilityCache) {
+    const cache = await session.availabilityCache;
+    if (cache?.[service_id]?.[date]) {
+      return cache[service_id][date];
+    }
+  }
+  return appointmentStore.findAvailableSlots(location.id, service_id, date, staff_id || null);
+}
+
+async function handle_book_appointment(
+  { service_id, staff_id, date, time, customer_name, customer_phone, notes },
+  location
+) {
+  const startAt = DateTime.fromFormat(`${date} ${time}`, 'yyyy-MM-dd HH:mm', { zone: location.timezone })
+    .toUTC().toISO();
+  if (!startAt) return { success: false, reason: 'Invalid date or time format.' };
+
+  return appointmentStore.bookAppointment({
+    locationId:    location.id,
+    serviceId:     service_id,
+    staffId:       staff_id || null,
+    resourceId:    null,   // auto-assign first available resource; manual assignment is a future enhancement
+    startAt,
+    customerName:  customer_name,
+    customerPhone: customer_phone.replace(/\D/g, ''),
+    notes:         notes || '',
+  });
+}
+
+async function handle_cancel_appointment({ confirmation_code, customer_phone, reason }, location) {
+  return appointmentStore.cancelAppointment({
+    locationId:       location.id,
+    confirmationCode: confirmation_code,
+    customerPhone:    customer_phone,
+    reason:           reason || null,
+  });
+}
+
+const APPOINTMENT_HANDLERS = {
+  get_services:                   handle_get_services,
+  get_staff:                      handle_get_staff,
+  check_appointment_availability: handle_check_appointment_availability,
+  book_appointment:               handle_book_appointment,
+  cancel_appointment:             handle_cancel_appointment,
+};
+```
+
+---
+
+### Task 7.4 — Vertical dispatch layer in `src/tools.js`
+
+Replace the current flat `TOOL_DEFINITIONS` export and `handleToolCall` function with a dispatcher. This is the single seam that routes calls to the right handler set.
+
+```js
+// Replace the existing exports at the bottom of src/tools.js:
+
+function getToolDefinitions(location) {
+  const allDefs = location.vertical === 'restaurant'
+    ? RESTAURANT_TOOL_DEFINITIONS
+    : APPOINTMENT_TOOL_DEFINITIONS;
+
+  // Respect per-tenant enabled_tools flag (Phase 6.4)
+  return allDefs.filter(t => location.enabled_tools.includes(t.name));
+}
+
+async function handleToolCall(toolName, toolInput, location, session) {
+  // Defense-in-depth: reject any tool not in enabled_tools regardless of vertical
+  if (!location.enabled_tools.includes(toolName)) {
+    return { error: 'Tool not enabled for this location.' };
+  }
+
+  const handlers = location.vertical === 'restaurant'
+    ? RESTAURANT_HANDLERS
+    : APPOINTMENT_HANDLERS;
+
+  const fn = handlers[toolName];
+  if (!fn) return { error: `Unknown tool: ${toolName}` };
+
+  return fn(toolInput, location, session);
+}
+
+module.exports = { getToolDefinitions, handleToolCall };
+```
+
+Update all call sites in `src/server.js` that previously referenced `TOOL_DEFINITIONS` directly to call `getToolDefinitions(location)` instead. Pass `session` through to `handleToolCall`.
+
+---
+
+### Task 7.5 — System prompt variants for new verticals
+
+Refactor `buildSystemPrompt(location, now)` in `src/server.js` to branch on `location.vertical`. Extract the existing restaurant logic into `buildRestaurantPrompt()` to keep the function readable. Add two new builders.
+
+```js
+function buildSystemPrompt(location, now) {
+  const localTime   = now.setZone(location.timezone);
+  const dateStr     = localTime.toFormat('cccc, LLLL d, yyyy');
+  const timeStr     = localTime.toFormat('h:mm a');
+  const enabledTools = location.enabled_tools;
+
+  const header = [
+    `You are a professional AI voice assistant for ${location.name}.`,
+    `Today is ${dateStr}. The current time is ${timeStr}.`,
+    `You are speaking with a customer over the phone. Be warm, concise, and professional.`,
+    `Always confirm details back to the caller before booking or cancelling anything.`,
+    `When you are about to call a tool, speak a brief acknowledgment first — never pause silently.`,
+  ].join('\n');
+
+  if (location.vertical === 'restaurant')    return buildRestaurantPrompt(location, header, enabledTools);
+  if (location.vertical === 'salon')         return buildSalonPrompt(location, header, enabledTools);
+  if (location.vertical === 'auto_detailing') return buildAutoDetailingPrompt(location, header, enabledTools);
+
+  throw new Error(`Unknown vertical: ${location.vertical}`);
+}
+
+function buildSalonPrompt(location, header, enabledTools) {
+  const cfg = location.config;
+  return `${header}
+
+You handle appointment booking, cancellations, and general inquiries for ${location.name}.
+
+SERVICES: Use get_services to fetch current services and pricing. Do not quote prices from memory.
+
+STAFF: Use get_staff only if the caller requests a specific stylist. Otherwise book with any available.
+
+BOOKING FLOW:
+1. Ask which service they'd like.
+2. Call check_appointment_availability with the service and their preferred date.
+3. Offer up to three available times. If they want different options, call again with another date.
+4. Confirm service, stylist (if specified), date, time, name, and phone number before booking.
+5. Call book_appointment. Read the confirmation code back to the caller.
+
+CANCELLATIONS: Ask for confirmation code and phone number. Use cancel_appointment. Confirm details.
+
+POLICIES: ${cfg.policies || 'Please arrive 5 minutes early. 24-hour cancellation notice is appreciated.'}
+
+HOURS: ${formatHours(cfg.hours)}
+
+Your tools: ${enabledTools.join(', ')}`.trim();
+}
+
+function buildAutoDetailingPrompt(location, header, enabledTools) {
+  const cfg = location.config;
+  return `${header}
+
+You handle appointment booking, cancellations, and general inquiries for ${location.name}.
+
+${cfg.client_context ? cfg.client_context + '\n' : ''}
+SERVICES: Use get_services to fetch current services and pricing. Do not quote prices from memory.
+
+BOOKING FLOW:
+1. Ask which service they need and for what vehicle (make, model, and approximate size).
+   Put vehicle details in the notes field — this helps the team prepare.
+2. Call check_appointment_availability with the service and preferred date.
+3. Offer up to three available times.
+4. Confirm service, vehicle info, date, time, name, and phone number before booking.
+5. Call book_appointment. Read the confirmation code back to the caller.
+
+CANCELLATIONS: Ask for confirmation code and phone number. Use cancel_appointment.
+
+DROP-OFF: ${cfg.dropoff_policy || "Clients drop off their vehicle at the start of the appointment. We'll call when it's ready."}
+
+POLICIES: ${cfg.policies || 'Payment is due upon completion.'}
+
+HOURS: ${formatHours(cfg.hours)}
+
+Your tools: ${enabledTools.join(', ')}`.trim();
+}
+```
+
+---
+
+### Task 7.6 — SMS templates for appointment verticals
+
+Add to `src/sms.js`. Both functions accept the `new_appointment` / `reminder_due` NOTIFY payload, resolve the full location via `locationStore`, and format the `start_at` UTC timestamp in the tenant's timezone.
+
+```js
+async function sendSmsAppointmentConfirmation({
+  id, location_id, customer_name, customer_phone, service_name, start_at
+}) {
+  const location = await locationStore.loadById(location_id);
+  const name = customer_name.split(' ')[0];
+  const dt   = DateTime.fromISO(start_at).setZone(location.timezone)
+    .toFormat("cccc, LLLL d 'at' h:mm a");
+  await twilioClient.messages.create({
+    from: location.sms_from_number || location.twilio_number,
+    to:   formatPhone(customer_phone),
+    body: `Hi ${name}! Your ${service_name} appointment at ${location.name} is confirmed for ${dt}. ` +
+          `Confirmation code: ${id}. Need to reschedule? Call us at ${location.config.phone}.`,
+  });
+}
+
+async function sendSmsAppointmentReminder({
+  id, location_id, customer_name, customer_phone, service_name, start_at
+}) {
+  const location = await locationStore.loadById(location_id);
+  const name = customer_name.split(' ')[0];
+  const dt   = DateTime.fromISO(start_at).setZone(location.timezone)
+    .toFormat("cccc, LLLL d 'at' h:mm a");
+  await twilioClient.messages.create({
+    from: location.sms_from_number || location.twilio_number,
+    to:   formatPhone(customer_phone),
+    body: `Hi ${name}! Reminder: your ${service_name} appointment at ${location.name} is tomorrow — ${dt}. ` +
+          `We look forward to it! Code: ${id}. Need to cancel? Call us at ${location.config.phone}.`,
+  });
+}
+
+module.exports = {
+  sendSmsConfirmation, sendSmsReminder,          // existing restaurant functions
+  sendSmsAppointmentConfirmation, sendSmsAppointmentReminder,
+};
+```
+
+---
+
+### Task 7.7 — Onboarding config templates
+
+Add two template files to `config/tenants/` as reference starting points for new clients. These are committed to git alongside the live tenant configs.
+
+**`config/tenants/TEMPLATE-salon.json`:**
+```json
+{
+  "_instructions": "Copy to config/tenants/<slug>.json, fill in all fields, then run: node scripts/create-location.js config/tenants/<slug>.json",
+  "id":              "salon-slug",
+  "account_id":      "account-slug",
+  "account_name":    "Owner Name or LLC",
+  "vertical":        "salon",
+  "twilio_number":   "+1XXXXXXXXXX",
+  "sms_from_number": "+1XXXXXXXXXX",
+  "timezone":        "America/Chicago",
+  "name":            "Salon Name",
+  "phone":           "(555) 000-0000",
+  "address":         "123 Main St, City, ST 00000",
+  "hours": {
+    "monday":    { "open": "09:00", "close": "18:00" },
+    "tuesday":   { "open": "09:00", "close": "18:00" },
+    "wednesday": { "open": "09:00", "close": "18:00" },
+    "thursday":  { "open": "09:00", "close": "20:00" },
+    "friday":    { "open": "09:00", "close": "18:00" },
+    "saturday":  { "open": "09:00", "close": "16:00" },
+    "sunday":    null
+  },
+  "policies": "We require 24-hour notice for cancellations. A credit card is required to hold color appointments.",
+  "services": [
+    { "id": "haircut",    "name": "Haircut & Style",        "duration_minutes": 60,  "price_cents": 6500  },
+    { "id": "color",      "name": "Color (Single Process)", "duration_minutes": 90,  "price_cents": 9500  },
+    { "id": "highlights", "name": "Highlights",             "duration_minutes": 120, "price_cents": 14500 },
+    { "id": "blowout",    "name": "Blowout",                "duration_minutes": 45,  "price_cents": 4500  }
+  ],
+  "staff": [
+    { "id": "jessica", "name": "Jessica", "services": ["haircut","color","highlights","blowout"] },
+    { "id": "marcus",  "name": "Marcus",  "services": ["haircut","blowout"] }
+  ],
+  "enabled_tools": ["get_services","get_staff","check_appointment_availability","book_appointment","cancel_appointment"]
+}
+```
+
+**`config/tenants/TEMPLATE-auto-detailing.json`:**
+```json
+{
+  "_instructions": "Copy to config/tenants/<slug>.json, fill in all fields, then run: node scripts/create-location.js config/tenants/<slug>.json",
+  "id":              "detailing-slug",
+  "account_id":      "account-slug",
+  "account_name":    "Owner Name or LLC",
+  "vertical":        "auto_detailing",
+  "twilio_number":   "+1XXXXXXXXXX",
+  "sms_from_number": "+1XXXXXXXXXX",
+  "timezone":        "America/Chicago",
+  "name":            "Detailing Business Name",
+  "phone":           "(555) 000-0000",
+  "address":         "123 Main St, City, ST 00000",
+  "hours": {
+    "monday":    { "open": "08:00", "close": "17:00" },
+    "tuesday":   { "open": "08:00", "close": "17:00" },
+    "wednesday": { "open": "08:00", "close": "17:00" },
+    "thursday":  { "open": "08:00", "close": "17:00" },
+    "friday":    { "open": "08:00", "close": "17:00" },
+    "saturday":  { "open": "08:00", "close": "14:00" },
+    "sunday":    null
+  },
+  "client_context": "We primarily serve a regular client base. New clients are welcome — if you're new, just mention it so we can discuss your vehicle's needs.",
+  "dropoff_policy": "Clients drop off their vehicle at the start of the appointment. We'll call or text when it's ready.",
+  "policies": "Payment accepted at pickup — cash, card, or Venmo. Please remove personal items before drop-off.",
+  "services": [
+    { "id": "express-wash",  "name": "Express Exterior Wash",   "duration_minutes": 60,  "price_cents": 4000  },
+    { "id": "full-interior", "name": "Full Interior Detail",     "duration_minutes": 180, "price_cents": 15000 },
+    { "id": "full-detail",   "name": "Full Interior & Exterior", "duration_minutes": 300, "price_cents": 22500 },
+    { "id": "ceramic-coat",  "name": "Ceramic Coating",          "duration_minutes": 480, "price_cents": null  }
+  ],
+  "resources": [
+    { "id": "bay-1", "name": "Bay 1" },
+    { "id": "bay-2", "name": "Bay 2" }
+  ],
+  "enabled_tools": ["get_services","check_appointment_availability","book_appointment","cancel_appointment"]
+}
+```
+
+Update `scripts/create-location.js` (Task 6.7) to handle appointment-vertical fields:
+
+```js
+// After upserting the locations row, check vertical and seed child tables:
+if (['salon', 'auto_detailing'].includes(data.vertical)) {
+  for (const svc of (data.services || [])) {
+    await pool.query(
+      `INSERT INTO services (location_id, id, name, duration_minutes, price_cents)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (location_id,id) DO UPDATE
+         SET name=EXCLUDED.name, duration_minutes=EXCLUDED.duration_minutes,
+             price_cents=EXCLUDED.price_cents`,
+      [data.id, svc.id, svc.name, svc.duration_minutes, svc.price_cents ?? null]
+    );
+  }
+  for (const s of (data.staff || [])) {
+    await pool.query(
+      `INSERT INTO staff (location_id, id, name, services)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (location_id,id) DO UPDATE SET name=EXCLUDED.name, services=EXCLUDED.services`,
+      [data.id, s.id, s.name, s.services]
+    );
+  }
+  for (const r of (data.resources || [])) {
+    await pool.query(
+      `INSERT INTO resources (location_id, id, name)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (location_id,id) DO UPDATE SET name=EXCLUDED.name`,
+      [data.id, r.id, r.name]
+    );
+  }
+}
+```
+
+---
+
+### Task 7.8 — `locationStore.js` hydration for appointment verticals
+
+`hydrateLocation()` currently joins `location_tables` for restaurant tenants. Extend it to join `services`, `staff`, and `resources` for appointment-based tenants. The in-memory cache stores the fully hydrated object, so tool handlers never make a per-call DB round-trip to fetch these.
+
+```js
+async function hydrateLocation(loc) {
+  if (loc.vertical === 'restaurant') {
+    const { rows: tables } = await pool.query(
+      `SELECT * FROM location_tables WHERE location_id = $1`, [loc.id]
+    );
+    return { ...loc, tables };
+  }
+
+  if (loc.vertical === 'salon' || loc.vertical === 'auto_detailing') {
+    const [{ rows: services }, { rows: staff }, { rows: resources }] = await Promise.all([
+      pool.query(`SELECT * FROM services  WHERE location_id = $1 AND active ORDER BY duration_minutes`, [loc.id]),
+      pool.query(`SELECT * FROM staff     WHERE location_id = $1 AND active`, [loc.id]),
+      pool.query(`SELECT * FROM resources WHERE location_id = $1 AND active`, [loc.id]),
+    ]);
+    return { ...loc, services, staff, resources };
+  }
+
+  return loc;
+}
+```
+
+**Ship boundary for Phase 7:** deploy after Tasks 7.1–7.8 are all complete and at least one tenant config file per new vertical has been loaded via `create-location.js`. Test by calling each Twilio number end-to-end.
+**Rollback:** the restaurant vertical is completely untouched. Revert new code, drop the five new tables and the widened CHECK constraint. Restaurant calls continue normally.
+
+---
+
+## Phase 8 — Demo Readiness
+
+Items that improve the quality of the first calls real prospects make to a tenant number. **All of these can ship without traffic data** — they are either pure UX wins (filler phrases), defensive code that prevents demo-call failures (keep-alive, streaming audit), or operational prerequisites (Twilio Toll-Free verification, ElevenLabs dashboard registration). This phase exists because the items it contains used to live in Phase 8 (Latency Optimization) but were entangled with measurement-driven work that requires production traffic the prototype doesn't yet have. Splitting them lets the demo-quality work ship now and the measurement-driven work wait until traffic exists.
+
+**Runs in parallel with Phase 7.** None of these tasks block Phase 7 schema work, and none of them depend on each other (with the exception that 8.1 must precede the first non-restaurant demo call).
+
+### Design decisions (pinned)
+
+- **Demo quality is binary on a phone call.** A prospect's first impression hinges on a small set of moments: the agent answering quickly, not going silent during a tool call, not dropping mid-conversation when the caller pauses to think. Each task in this phase fixes one of those moments. Skipping any one of them risks a memorable bad demo.
+
+- **Perceived latency ≠ actual latency.** A filler phrase ("let me check that for you…") played while a tool runs eliminates the dead air callers notice most. Task 8.3 delivers this with zero code change to the call path — it's a dashboard toggle plus a system-prompt nudge.
+
+- **Twilio Toll-Free verification, not 10DLC, for demo-pace turnaround.** A2P 10DLC registration can take days and requires a registered business entity. Toll-Free verification is a faster path that still produces deliverable SMS for the demo window. Task 8.5 captures the workflow.
+
+- **Manual operational steps are part of the plan.** The ElevenLabs dashboard tool registration (Task 8.1) and Toll-Free verification (Task 8.5) are not code, but they gate demo calls. Documenting them here means they don't get forgotten.
+
+---
+
+### Task 8.1 — ElevenLabs dashboard: register Client tools for new verticals
+
+**Manual prerequisite for the first salon or detailer demo call.** No code; one-time console action.
+
+In the ElevenLabs Conversational AI dashboard, on the agent referenced by `ELEVENLABS_AGENT_ID`, add the five appointment-vertical tools as **Client tools** (matching the schemas defined in Task 7.3):
+
+- `get_services`
+- `get_staff`
+- `check_appointment_availability`
+- `book_appointment`
+- `cancel_appointment`
+
+Match each tool's name and parameter schema exactly to what `APPOINTMENT_TOOL_DEFINITIONS` exports. ElevenLabs validates inbound `client_tool_call` messages against the dashboard registration; an unregistered tool gets ignored silently and the agent will go quiet on the call.
+
+**Verification:** call the dev harness or a staging Twilio number pointed at a salon-vertical tenant, ask "what services do you offer?", confirm `get_services` is invoked and returns a result. If the agent freezes after announcing it'll check, the dashboard registration is missing or schema-mismatched.
+
+The existing six restaurant tools remain registered. The dashboard does not need to know which tenant uses which subset — that's enforced by the `enabled_tools` filter (Phase 6.4) and the vertical dispatch (Task 7.4).
+
+---
+
+### Task 8.2 — Verify and harden the ElevenLabs audio streaming path
+
+ElevenLabs sends audio back over the WebSocket as a stream of base64-encoded μ-law chunks. Verify that `src/server.js` forwards each chunk to Twilio as it arrives — not buffered until the agent turn ends.
+
+Audit `elWs.on('message', ...)`. The hot path must be:
+```
+ElevenLabs message received → parse → type === 'audio' → write to twilioWs immediately
+```
+
+If you find an `Array.push()` + later `forEach()` pattern anywhere in this path, replace it with direct forwarding.
+
+Add a **back-pressure guard** to handle poor mobile connections gracefully:
+
+```js
+elWs.on('message', (raw) => {
+  const msg = JSON.parse(raw);
+
+  if (msg.type === 'audio') {
+    if (twilioWs.bufferedAmount > 32_768) {  // 32 KB threshold
+      // (Phase 9.1 will add a logger.markLatency('backpressure_event') call here.)
+      return;  // drop — Twilio's jitter buffer handles gaps; don't accumulate on our side
+    }
+    twilioWs.send(JSON.stringify({
+      event:     'media',
+      streamSid: session.streamSid,
+      media:     { payload: msg.audio.chunk },
+    }));
+  }
+  // ... handle other message types unchanged
+});
+```
+
+The `firstAudioSent` / `markLatency('first_audio_to_caller')` hooks referenced in the original Phase 8 plan are deferred to Phase 9.1 — instrumentation only matters once there's traffic to instrument.
+
+---
+
+### Task 8.3 — Interim acknowledgment during tool calls
+
+When the agent fires a tool call, the caller hears silence until the tool resolves and the agent resumes speaking. This is the most-noticed latency on any voice AI product. Eliminating the silence — even with a short filler phrase — dramatically reduces perceived latency.
+
+**Step 1 — ElevenLabs dashboard configuration (no code):**
+
+In the ElevenLabs agent settings → "Conversation" → "Tool behavior", enable **"Agent says something while waiting for tool response"** and configure filler phrases:
+- "Let me check that for you..."
+- "One moment while I look that up..."
+- "Sure, give me just a second..."
+
+ElevenLabs synthesizes and streams one of these phrases at the start of every tool call, before the result arrives.
+
+**Step 2 — System prompt reinforcement:**
+
+Add to all vertical system prompt builders (in `buildSystemPrompt`'s header block, already introduced in Task 7.5):
+
+```
+When you are about to call a tool, always speak a brief acknowledgment before the tool fires.
+Examples:
+- Before check_appointment_availability or check_availability: "Let me pull up what's available..."
+- Before book_appointment or book_reservation: "Alright, booking that for you now..."
+- Before cancel_appointment or cancel_reservation: "Let me look up that appointment..."
+Never pause silently. Always speak before waiting for a tool result.
+```
+
+**Expected impact:** callers report a qualitatively different experience when silence is replaced with voice. This change alone typically reduces "the AI froze" complaints to near zero, independent of any actual latency reduction. **Highest single ROI item across Phase 8 + 9.**
+
+---
+
+### Task 8.4 — WebSocket keep-alive for the ElevenLabs connection
+
+Railway's load balancer terminates idle TCP connections after 60 seconds. During a long pause in conversation — a caller going quiet to check a date or think over options — the ElevenLabs WebSocket can silently drop, causing the agent to go dead for the rest of the call. Demo prospects often pause to think, exactly the case this protects against.
+
+Add a ping/pong loop on `elWs`:
+
+```js
+// After: elWs = new WebSocket(elevenLabsUrl)
+const keepAlive = setInterval(() => {
+  if (elWs.readyState === WebSocket.OPEN) elWs.ping();
+}, 20_000);  // every 20 seconds — well under the 60s idle limit
+
+elWs.on('close', () => clearInterval(keepAlive));
+elWs.on('pong',  () => { /* connection confirmed alive */ });
+```
+
+Zero-downside — a ping is 2 bytes. Ship in its own commit; nothing else depends on it.
+
+---
+
+### Task 8.5 — Twilio Toll-Free verification for tenant numbers
+
+**Operational task, not code.** Carrier-side delivery of A2P SMS in the US requires either A2P 10DLC registration (long-form, multi-day, requires registered business entity) or Toll-Free verification (shorter form, faster turnaround, works for solo operators). For demo-pace turnaround, Toll-Free is the right path.
+
+For each demo Twilio number whose SMS confirmation needs to actually arrive on the prospect's handset:
+
+1. **Buy a Toll-Free number** in the Twilio console for that tenant. Update the location row's `twilio_number` (and `sms_from_number`) — `scripts/create-location.js` re-runs idempotently against the updated JSON.
+2. **Submit Toll-Free verification:** Twilio Console → Messaging → Regulatory Compliance → Toll-Free Verifications → New. Provide business name, expected message volume, sample message body (paste a real confirmation body from `src/sms.js`), opt-in description (caller verbally consents at booking), and contact info.
+3. **Wait for approval.** Typically a few hours to a few days; status visible in the same console.
+4. **Verify on a real phone.** Place a test booking, confirm the SMS arrives. If undelivered, re-query Twilio for the `error_code` — `30032` is "Toll-Free not verified" (still pending), `30034` is "10DLC unregistered" (different number, wrong path).
+
+For attended demos where you're sitting next to the prospect, SMS delivery is recoverable ("here's what would have arrived"). For unattended demos where the prospect calls alone, Toll-Free verification needs to clear before the demo. Plan accordingly.
+
+This task does not block the rest of Phase 8 from shipping — verification can run in parallel with the code work. It does block the *demo experience* on tenants where SMS is part of the demo script.
+
+---
+
+**Ship boundary for Phase 8:** Tasks 8.2 and 8.4 are code changes — ship in PRs alongside or after Phase 7. Tasks 8.1 and 8.3 are dashboard actions — do them once before the first non-restaurant demo. Task 8.5 is operational paperwork — start it as soon as Toll-Free numbers are bought.
+
+**Rollback:** Tasks 8.2 and 8.4 are isolated additions to `src/server.js` — revert the commit. Dashboard changes (8.1, 8.3) are reversed in the dashboard. Toll-Free verification doesn't roll back; once submitted, the application stays on file.
+
+---
+
+## Phase 9 — Latency Optimization (deferred until traffic exists)
+
+Phase 9 is the measurement-driven half of what was originally Phase 8. The items here are valuable but presuppose production traffic — instrumentation needs samples to be useful, infrastructure spend needs callers to justify it, and validation gates need a baseline to measure against. **Do not start Phase 9 while traffic is < ~100 calls/week.** The signal-to-noise ratio is too low and the spend is unjustified.
+
+When call volume warrants, the order is:
+
+1. Ship **9.1 (instrumentation)** first.
+2. Collect baseline data over enough representative traffic that P50/P95 stabilize (typically several hundred calls).
+3. Apply 9.2–9.4 in any order; each is independent.
+4. Run **9.5 (validation)** to confirm the targets are met.
+
+Until then, the design decisions and tasks below are recorded for completeness so they aren't re-discovered later.
+
+### Design decisions (pinned)
+
+- **Measure before optimizing.** Every task here is validated against the per-call telemetry produced by 9.1. Gut-feel tuning without data is waste.
+
+- **Pre-caching over query optimization.** The availability queries are already well-indexed. The win is not in the query speed but in firing it before the caller asks. Task 9.2 prefetches today + tomorrow on call start so the first availability check is a memory lookup. Includes invalidation on successful book — see task body.
+
+- **No infra changes until measurements confirm they're warranted.** Region co-location and always-on dyno (Task 9.4) are low-cost, low-risk — but they cost money and have diminishing returns if the true bottleneck is elsewhere. Ship 9.1 first, collect baseline, then assess.
+
+---
+
+### Task 9.1 — Latency instrumentation
+
+Add a `latency_breakdown` column to `calls`:
+
+```sql
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS latency_breakdown JSONB NOT NULL DEFAULT '{}';
+```
+
+Extend `src/callLogger.js` to record timestamps at key moments:
+
+```js
+// Add to the session object initialized in startCall():
+this.startMs      = Date.now();
+this.latencyMarks = [];
+
+// New method — call at key moments in server.js and tools.js:
+markLatency(label, detail = null) {
+  this.latencyMarks.push({
+    label,
+    ...(detail ? { detail } : {}),
+    ms: Date.now() - this.startMs,
+  });
+}
+
+// In endCall(), compute summary metrics and flush to DB:
+const ttfa = this.latencyMarks.find(m => m.label === 'first_audio_to_caller')?.ms ?? null;
+const toolDurations = this.latencyMarks
+  .filter(m => m.label === 'tool_call_end')
+  .map(m => {
+    const start = this.latencyMarks.find(
+      s => s.label === 'tool_call_start' && s.detail === m.detail
+    );
+    return start ? m.ms - start.ms : null;
+  }).filter(Boolean);
+
+const latencyBreakdown = {
+  marks:       this.latencyMarks,
+  ttfa_ms:     ttfa,
+  p50_tool_ms: toolDurations.length ? toolDurations.sort((a,b)=>a-b)[Math.floor(toolDurations.length/2)] : null,
+  p95_tool_ms: toolDurations.length ? toolDurations.sort((a,b)=>a-b)[Math.floor(toolDurations.length*0.95)] : null,
+};
+
+// Include latency_breakdown in the endCall() UPDATE query.
+```
+
+Call sites to add in `src/server.js`:
+
+```js
+logger.markLatency('call_start');               // in the WS 'start' event handler
+logger.markLatency('first_el_message');         // first message received from ElevenLabs WS
+logger.markLatency('first_audio_to_caller');    // first μ-law chunk forwarded to Twilio
+// In handleToolCall wrapper:
+logger.markLatency('tool_call_start', toolName);
+// ...await the handler...
+logger.markLatency('tool_call_end', toolName);
+```
+
+After enough representative production traffic that P50/P95 stabilize (typically several hundred calls — calendar time depends on volume), run the baseline query:
+
+```sql
+SELECT
+  percentile_cont(0.5)  WITHIN GROUP (ORDER BY (latency_breakdown->>'ttfa_ms')::int)     AS p50_ttfa_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY (latency_breakdown->>'ttfa_ms')::int)     AS p95_ttfa_ms,
+  percentile_cont(0.5)  WITHIN GROUP (ORDER BY (latency_breakdown->>'p50_tool_ms')::int) AS p50_tool_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY (latency_breakdown->>'p95_tool_ms')::int) AS p95_tool_ms
+FROM calls
+WHERE latency_breakdown != '{}';
+```
+
+Record these four numbers as the baseline before proceeding to 9.2–9.4.
+
+---
+
+### Task 9.2 — Availability pre-caching on call start
+
+Fire a background prefetch of today's and tomorrow's availability as soon as the Twilio `start` event resolves the tenant. Store the result as a Promise on the session object. When the availability tool fires, await the Promise and check the cache first — the query is already running or complete.
+
+In `src/server.js`, after setting `session.location`:
+
+```js
+// Fire and forget — the tool handler awaits this Promise, not us.
+session.availabilityCache = prefetchAvailability(session.location).catch(err => {
+  console.error('Availability prefetch failed (non-fatal):', err.message);
+  return null;
+});
+
+async function prefetchAvailability(location) {
+  const tz       = location.timezone;
+  const today    = DateTime.now().setZone(tz).toISODate();
+  const tomorrow = DateTime.now().setZone(tz).plus({ days: 1 }).toISODate();
+
+  if (location.vertical === 'restaurant') {
+    const [t, tm] = await Promise.all([
+      reservationStore.getAvailableTables(location, today),  // NOTE: this helper
+      reservationStore.getAvailableTables(location, tomorrow), // does not exist yet;
+    ]);                                                        // create alongside the
+    return { [today]: t, [tomorrow]: tm };                     // pre-cache work.
+  }
+
+  if (location.vertical === 'salon' || location.vertical === 'auto_detailing') {
+    const serviceIds = location.services.map(s => s.id);
+    const result = {};
+    await Promise.all(serviceIds.map(async (sid) => {
+      const [t, tm] = await Promise.all([
+        appointmentStore.findAvailableSlots(location.id, sid, today),
+        appointmentStore.findAvailableSlots(location.id, sid, tomorrow),
+      ]);
+      result[sid] = { [today]: t, [tomorrow]: tm };
+    }));
+    return result;
+  }
+}
+```
+
+In `handle_check_appointment_availability` and the equivalent restaurant handler, check the cache before hitting the DB:
+
+```js
+async function handle_check_appointment_availability({ service_id, date }, location, session) {
+  if (session?.availabilityCache) {
+    const cache = await session.availabilityCache;
+    if (cache?.[service_id]?.[date]) {
+      logger.markLatency('availability_cache_hit');
+      return cache[service_id][date];
+    }
+  }
+  logger.markLatency('availability_cache_miss');
+  return appointmentStore.findAvailableSlots(location.id, service_id, date);
+}
+```
+
+**Cache invalidation (do not skip):** the cache is per-call and pre-fetched once at call start. If a caller books during the call and then asks "is the next slot still available?", the cache will say yes for that staff/resource even though the DB now says no. After any successful `book_appointment` or `book_reservation` for `today` or `tomorrow`, drop the cache entry for the affected `(service_id, date)` so the next availability check goes live:
+
+```js
+// In handle_book_appointment, after a successful insert:
+if (session?.availabilityCache) {
+  const cache = await session.availabilityCache;
+  if (cache?.[service_id]) delete cache[service_id][date];
+}
+```
+
+Symmetric pattern for `handle_book_reservation`. The simplest correct version drops the entire cache after any booking; that's also fine.
+
+**Expected impact:** first availability query on a call drops from ~150–400ms (DB round-trip) to ~0–5ms for today/tomorrow. Cache miss for other dates falls back to a live query.
+
+---
+
+### Task 9.3 — System prompt size audit
+
+Every token in the system prompt adds to TTFA. Run this audit before Phase 7 ships and again after, since the new vertical prompts add content.
+
+```bash
+node -e "
+const { buildSystemPrompt } = require('./src/systemPrompt');
+const loc = JSON.parse(require('fs').readFileSync('config/tenants/the-tide-house.json','utf8'));
+const { DateTime } = require('luxon');
+const prompt = buildSystemPrompt(loc, DateTime.now());
+console.log('Characters:', prompt.length);
+console.log('Tokens (approx):', Math.ceil(prompt.length / 4));
+console.log('---');
+console.log(prompt);
+"
+```
+
+**Heuristic target:** keep each vertical's system prompt under 800 tokens (~3,200 characters). The exact number is unsourced — use the 9.1 instrumentation to measure TTFA before and after a trim and let the data set the bar. Common bloat to eliminate:
+
+- Redundant hedging phrases ("always make sure to", "be sure to always") — cut to one clear instruction per behavior.
+- The business name repeated more than twice.
+- Tool descriptions restating what the tool's own `description` field already says. The prompt should say *when* to use each tool, not *what* it does.
+- Hours and menu inlined as verbose JSON — use compact prose: `Mon–Fri 9am–6pm, Sat 9am–4pm, Sun closed`.
+- Any instructional block that doesn't change the model's behavior in a way that can be verified in a call transcript.
+
+After trimming, re-check TTFA from `latency_breakdown` over the following week. The often-cited "30% prompt reduction → 50–150ms TTFA improvement" rule of thumb is suggestive, not a guarantee — validate with measurement.
+
+---
+
+### Task 9.4 — Railway: enable always-on and verify region
+
+**Cost note:** always-on is a paid Railway feature; budget for it before enabling. For zero-revenue prototype operation it's a real-money decision, not a free win.
+
+**Always-on:** In Railway's service settings, enable **"Always On"**. This prevents the service from scaling to zero between calls. A Railway cold start takes 3–8 seconds — the largest single latency spike, and it occurs at the worst possible moment: the first call of the day or any call after a quiet period.
+
+After enabling, verify in `latency_breakdown` data that `first_el_message` consistently appears within 50–100ms of `call_start`. Any trace with `first_el_message` > 3,000ms is a cold-start survivor — there should be none after this change.
+
+**Region:** confirm your Railway service is deployed to a US-East region (Railway names them e.g. `us-east1` — verify the current naming in Railway dashboard → Service → Settings → Region; the original plan referenced `us-east4`, which is GCP terminology, not Railway's). ElevenLabs routes WebSocket connections to the geographically nearest datacenter; US-East Railway regions are typically co-located with ElevenLabs' primary US infrastructure, but verify against the latency telemetry from 9.1 before committing to a region change — co-location *should* help but the magnitude depends on which ElevenLabs PoP is actually serving you.
+
+---
+
+### Task 9.5 — Validation query (success gate)
+
+After Tasks 9.1–9.4 have been deployed long enough to accumulate a representative sample (typically a few hundred calls), run the validation query to confirm measurable improvement against the pre-9.1 baseline:
+
+```sql
+SELECT
+  DATE_TRUNC('week', started_at)                                                           AS week,
+  COUNT(*)                                                                                  AS calls,
+  ROUND(percentile_cont(0.5)  WITHIN GROUP (ORDER BY (latency_breakdown->>'ttfa_ms')::int)) AS p50_ttfa_ms,
+  ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY (latency_breakdown->>'ttfa_ms')::int)) AS p95_ttfa_ms,
+  ROUND(percentile_cont(0.5)  WITHIN GROUP (ORDER BY (latency_breakdown->>'p50_tool_ms')::int)) AS p50_tool_ms,
+  COUNT(*) FILTER (WHERE latency_breakdown ? 'backpressure_event')   AS backpressure_events,
+  COUNT(*) FILTER (WHERE latency_breakdown ? 'availability_cache_hit') AS cache_hits,
+  COUNT(*) FILTER (WHERE (latency_breakdown->'marks' @> '[{"label":"first_el_message"}]')
+    AND (
+      SELECT (m->>'ms')::int FROM jsonb_array_elements(latency_breakdown->'marks') m
+      WHERE m->>'label' = 'first_el_message' LIMIT 1
+    ) > 3000
+  )                                                                   AS cold_start_traces
+FROM calls
+WHERE latency_breakdown != '{}'
+GROUP BY 1
+ORDER BY 1 DESC;
+```
+
+**Success criteria:**
+- P50 TTFA ≤ 1,200ms
+- P95 TTFA ≤ 2,500ms
+- P50 tool call duration ≤ 200ms
+- `cold_start_traces` = 0 (always-on working)
+- Cache hit rate ≥ 60% on calls that invoked an availability tool (callers overwhelmingly ask about today/tomorrow)
+
+If P95 TTFA remains above target after these changes, the remaining bottleneck is almost certainly LLM inference inside ElevenLabs — at which point the lever is reducing system prompt length further (Task 9.3) or contacting ElevenLabs about model tier options.
+
+---
+
+### Phase 7 + 8 + 9 task order
+
+```
+Phase 6 through 6.7 must be complete before Phase 7 starts.
+6.8 / 6.9 / 6.10 are non-blocking polish; defer or run in parallel.
+
+Phase 7 critical path:   7.1 → 7.2 → 7.3 → 7.4 → 7.5 → 7.6
+Phase 7 parallel:        7.7 (templates) and 7.8 (locationStore hydration)
+                         can land alongside 7.3–7.5
+
+Phase 8 (Demo Readiness) runs in parallel with Phase 7. None of its
+tasks block each other, none require traffic data:
+    8.1 (EL dashboard tool registration)  — gate for first non-restaurant demo call
+    8.2 (audio streaming audit)           — defensive, ship anytime
+    8.3 (interim acknowledgment)          — highest single ROI in the whole plan
+    8.4 (WebSocket keep-alive)            — zero-downside, ship anytime
+    8.5 (Toll-Free verification)          — operational, run in parallel
+
+Phase 9 (Latency Optimization) is DEFERRED until production traffic exists
+(target: ~100+ calls/week). Order when started:
+    9.1 (instrumentation) → deploy → collect baseline (several hundred calls)
+    → 9.2 + 9.3 + 9.4 (core wins; any order)
+    → 9.5 (validate against baseline)
+9.2 (pre-caching) requires a reservationStore.getAvailableTables helper
+that does not yet exist; create it as part of 9.2 (not a Phase 7 prerequisite).
+```
